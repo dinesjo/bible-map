@@ -23,7 +23,10 @@ const state = {
   selectedId: "jerusalem"
 };
 
-const routeRail = document.getElementById("routeRail");
+const routePicker = document.getElementById("routePicker");
+const routePickerButton = document.getElementById("routePickerButton");
+const routePickerText = document.getElementById("routePickerText");
+const routeMenu = document.getElementById("routeMenu");
 const testamentFilters = document.getElementById("testamentFilters");
 const eraFilters = document.getElementById("eraFilters");
 const bookFilters = document.getElementById("bookFilters");
@@ -76,15 +79,6 @@ function bookSort(a, b) {
   const safeB = bIndex === -1 ? Number.MAX_SAFE_INTEGER : bIndex;
   if (safeA !== safeB) return safeA - safeB;
   return collator.compare(a, b);
-}
-
-function getInitials(name) {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase();
 }
 
 function getLocation(id) {
@@ -167,19 +161,195 @@ function buildFilterChip(label, active, dataset) {
   return `<button class="toggle-chip${active ? " is-active" : ""}" type="button" ${dataset}>${escapeHtml(label)}</button>`;
 }
 
-function renderStaticControls() {
-  routeRail.innerHTML = [
-    `<button class="route-chip${state.route === null ? " is-active" : ""}" type="button" data-route="">
-      <strong>Hela kartan</strong>
-      <span>Visa hela regionen och återställ berättelsespår.</span>
-    </button>`,
-    ...storyRoutes.map((route) => `
-      <button class="route-chip${state.route === route.id ? " is-active" : ""}" type="button" data-route="${route.id}">
-        <strong>${escapeHtml(route.title)}</strong>
-        <span>${escapeHtml(route.subtitle)}</span>
+function getRouteOptions() {
+  return [
+    { id: "", title: "Hela kartan", subtitle: "alla platser" },
+    ...storyRoutes.map((route) => ({
+      id: route.id,
+      title: route.title,
+      subtitle: route.subtitle
+    }))
+  ];
+}
+
+function getRouteLabel(option) {
+  return `${option.title} - ${option.subtitle}`;
+}
+
+function getCurrentRouteOption() {
+  return getRouteOptions().find((option) => option.id === (state.route || "")) || getRouteOptions()[0];
+}
+
+function closeRouteMenu(restoreFocus = false) {
+  routePicker.classList.remove("is-open");
+  routePickerButton.setAttribute("aria-expanded", "false");
+  routeMenu.hidden = true;
+  if (restoreFocus) routePickerButton.focus();
+}
+
+function focusRouteOption(option) {
+  if (!option) return;
+  routeMenu.querySelectorAll("[data-route-option]").forEach((item) => {
+    item.tabIndex = item === option ? 0 : -1;
+  });
+  option.focus();
+}
+
+function openRouteMenu(focusSelected = false) {
+  routePicker.classList.add("is-open");
+  routePickerButton.setAttribute("aria-expanded", "true");
+  routeMenu.hidden = false;
+
+  if (focusSelected) {
+    const focusSelectedOption = () => {
+      const selected = routeMenu.querySelector("[aria-selected='true']");
+      focusRouteOption(selected || routeMenu.querySelector("[data-route-option]"));
+    };
+
+    focusSelectedOption();
+    requestAnimationFrame(focusSelectedOption);
+    setTimeout(focusSelectedOption, 0);
+  }
+}
+
+function toggleRouteMenu() {
+  if (routeMenu.hidden) {
+    openRouteMenu(false);
+    return;
+  }
+  closeRouteMenu();
+}
+
+function selectRouteOption(routeId) {
+  closeRouteMenu();
+  handleRouteSelection(routeId);
+}
+
+function handleRouteMenuKeydown(event) {
+  const options = [...routeMenu.querySelectorAll("[data-route-option]")];
+  const activeOption = document.activeElement.closest?.("[data-route-option]")
+    || routeMenu.querySelector("[data-route-option][tabindex='0']")
+    || options[0];
+  const currentIndex = Math.max(0, options.indexOf(activeOption));
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeRouteMenu(true);
+    return;
+  }
+
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    if (activeOption) selectRouteOption(activeOption.dataset.routeOption);
+    return;
+  }
+
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const offset = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex = (currentIndex + offset + options.length) % options.length;
+    focusRouteOption(options[nextIndex]);
+    return;
+  }
+
+  if (event.key === "Home" || event.key === "End") {
+    event.preventDefault();
+    focusRouteOption(event.key === "Home" ? options[0] : options[options.length - 1]);
+  }
+}
+
+function bindRoutePicker() {
+  if (routePicker.dataset.bound) return;
+
+  routePickerButton.addEventListener("click", toggleRouteMenu);
+  routePickerButton.addEventListener("keydown", (event) => {
+    if (!routeMenu.hidden) {
+      handleRouteMenuKeydown(event);
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      openRouteMenu(true);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      openRouteMenu(false);
+      focusRouteOption(routeMenu.querySelector("[data-route-option]:last-child"));
+    }
+  });
+
+  routeMenu.addEventListener("click", (event) => {
+    const option = event.target.closest("[data-route-option]");
+    if (!option) return;
+    selectRouteOption(option.dataset.routeOption);
+  });
+
+  routeMenu.addEventListener("keydown", handleRouteMenuKeydown);
+
+  document.addEventListener("click", (event) => {
+    if (routeMenu.hidden || routePicker.contains(event.target)) return;
+    closeRouteMenu();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (routeMenu.hidden) return;
+    if (event.target === document.body) handleRouteMenuKeydown(event);
+    if (event.key === "Escape") closeRouteMenu(true);
+  });
+
+  routePicker.dataset.bound = "true";
+}
+
+function renderRoutePicker() {
+  const selected = getCurrentRouteOption();
+  routePickerText.textContent = getRouteLabel(selected);
+  routeMenu.innerHTML = getRouteOptions().map((option) => {
+    const isSelected = option.id === (state.route || "");
+    return `
+      <button
+        class="route-option${isSelected ? " is-selected" : ""}"
+        id="route-option-${option.id || "all"}"
+        type="button"
+        role="option"
+        aria-selected="${isSelected}"
+        data-route-option="${escapeHtml(option.id)}"
+        tabindex="${isSelected ? "0" : "-1"}"
+      >
+        <span class="route-option-title">${escapeHtml(option.title)}</span>
+        <span class="route-option-subtitle">${escapeHtml(option.subtitle)}</span>
       </button>
-    `)
-  ].join("");
+    `;
+  }).join("");
+  bindRoutePicker();
+}
+
+function handleRouteSelection(routeId) {
+  state.route = routeId || null;
+
+  if (state.route) {
+    const route = storyRoutes.find((item) => item.id === state.route);
+    const visible = getVisibleLocations();
+    const ids = route.locations.filter((id) => visible.some((location) => location.id === id));
+    if (ids.length) state.selectedId = ids[0];
+  }
+
+  renderAll();
+
+  if (state.route) {
+    const route = getActiveRoute();
+    const visible = getVisibleLocations();
+    const ids = route.locations.filter((id) => visible.some((location) => location.id === id));
+    if (ids.length) focusOnLocations(ids, true);
+  } else {
+    fitDefaultView(true);
+  }
+}
+
+function renderStaticControls() {
+  renderRoutePicker();
 
   testamentFilters.innerHTML = [
     buildFilterChip("Alla", state.testament === "alla", 'data-testament="alla"'),
@@ -205,12 +375,10 @@ function renderStaticControls() {
 
   characterFilters.innerHTML = [
     `<button class="character-button${state.character === "alla" ? " is-active" : ""}" type="button" data-character="alla">
-      <span class="character-glyph">Alla</span>
       <span class="character-copy"><strong>Alla gestalter</strong><span>Visa hela persongalleriet</span></span>
     </button>`,
     ...featuredCharacters.map((character) => `
       <button class="character-button${state.character === character.name ? " is-active" : ""}" type="button" data-character="${character.name}">
-        <span class="character-glyph">${escapeHtml(getInitials(character.name))}</span>
         <span class="character-copy"><strong>${escapeHtml(character.name)}</strong><span>${escapeHtml(character.note)}</span></span>
       </button>
     `)
@@ -221,31 +389,6 @@ function renderStaticControls() {
       <span class="legend-swatch" style="background:${entry.color};"></span>${escapeHtml(entry.label)}
     </span>
   `).join("");
-
-  routeRail.querySelectorAll("[data-route]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const routeId = button.dataset.route || null;
-      state.route = routeId;
-
-      if (routeId) {
-        const route = storyRoutes.find((item) => item.id === routeId);
-        const visible = getVisibleLocations();
-        const ids = route.locations.filter((id) => visible.some((location) => location.id === id));
-        if (ids.length) state.selectedId = ids[0];
-      }
-
-      renderAll();
-
-      if (routeId) {
-        const route = getActiveRoute();
-        const visible = getVisibleLocations();
-        const ids = route.locations.filter((id) => visible.some((location) => location.id === id));
-        if (ids.length) focusOnLocations(ids, true);
-      } else {
-        fitDefaultView(true);
-      }
-    });
-  });
 
   testamentFilters.querySelectorAll("[data-testament]").forEach((button) => {
     button.addEventListener("click", () => {

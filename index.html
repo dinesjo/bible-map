@@ -7,62 +7,70 @@
 </head>
 <body>
   <main class="page">
-    <section class="hero glass">
-      <div class="hero-copy">
+    <header class="app-header glass">
+      <div class="brand-block">
         <p class="eyebrow">Bibel 2000 • Interaktiv atlas</p>
         <h1>Bibellandskap</h1>
         <p class="lede">
-          En levande webbkarta för att följa Bibelns berättelser genom Egypten, Sinai, Levanten, Mesopotamien och Persien.
-          Dra, panorera och nyp för att zooma. Filtrera på testamenten, epoker, böcker och framträdande gestalter för att se
-          var berättelserna utspelar sig och vilka bibelböcker som nämner varje plats.
+          Följ Bibelns platser genom Egypten, Sinai, Levanten, Mesopotamien och Persien med karta, filter och berättelsespår i samma arbetsyta.
         </p>
-        <div class="hero-badges">
-          <span class="badge"><strong>32 platser</strong> med svenska bokhänvisningar</span>
-          <span class="badge"><strong>12 berättelsespår</strong> för visuell vägledning</span>
-          <span class="badge"><strong>Touch + trackpad</strong> för mobil och laptop</span>
-        </div>
-        <div class="route-rail" id="routeRail" aria-label="Berättelsespår"></div>
       </div>
 
-      <div class="hero-side">
-        <section class="summary-card glass" id="summaryCard">
-          <p class="section-label">Guidning</p>
-          <h2>Följ berättelsen geografiskt</h2>
-          <p id="summaryText">
-            Välj ett berättelsespår för att låta kartan markera en resa eller en historisk båge genom regionerna.
-          </p>
-        </section>
+      <section class="summary-card" id="summaryCard">
+        <p class="section-label">Guidning</p>
+        <h2>Följ berättelsen geografiskt</h2>
+        <p id="summaryText">
+          Välj ett berättelsespår för att låta kartan markera en resa eller en historisk båge genom regionerna.
+        </p>
+      </section>
 
-        <section class="stats-card glass">
-          <p class="section-label">Snabböversikt</p>
-          <div class="stats-grid">
-            <div class="stat">
-              <strong id="visibleCount">32</strong>
-              <span>synliga platser</span>
-            </div>
-            <div class="stat">
-              <strong>GT + NT</strong>
-              <span>testamenten finns som lager</span>
-            </div>
-            <div class="stat">
-              <strong>Bibel 2000</strong>
-              <span>referenssystem i svensk språkdräkt</span>
-            </div>
+      <section class="stats-card">
+        <p class="section-label">Översikt</p>
+        <div class="stats-grid">
+          <div class="stat">
+            <strong id="visibleCount">32</strong>
+            <span>synliga platser</span>
           </div>
-        </section>
-      </div>
-    </section>
+          <div class="stat">
+            <strong>GT + NT</strong>
+            <span>testamenten</span>
+          </div>
+          <div class="stat">
+            <strong>12</strong>
+            <span>berättelsespår</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="route-dock" aria-labelledby="routeTitle">
+        <div class="route-dock-head">
+          <p class="section-label">Berättelsespår</p>
+          <h2 id="routeTitle">Välj resa</h2>
+        </div>
+        <div class="route-picker" id="routePicker">
+          <button
+            class="route-picker-button"
+            id="routePickerButton"
+            type="button"
+            aria-haspopup="listbox"
+            aria-expanded="false"
+            aria-controls="routeMenu"
+          >
+            <span id="routePickerText">Hela kartan - alla platser</span>
+          </button>
+          <div class="route-menu" id="routeMenu" role="listbox" aria-label="Välj berättelsespår" hidden></div>
+        </div>
+      </section>
+    </header>
 
     <section class="workspace">
       <section class="map-panel glass">
         <div class="map-heading">
           <div class="map-heading-copy">
             <p class="section-label">Karta</p>
-            <h2>Biblisk geografi i sammanhang</h2>
+            <h2>Atlas</h2>
             <p>
-              Baslagret bygger på en verklig karta över Mellanöstern och omgivande regioner. Land- och ortnamn visas på svenska där
-              vektordatan innehåller svenska namn. Tvåfingersdrag panorera, nyp eller använd <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + scroll
-              för att zooma.
+              Panorera, zooma och markera platser. Använd <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + scroll eller nypgest för zoom.
             </p>
           </div>
 
@@ -110,9 +118,7 @@
         </div>
 
         <p class="footnote">
-          Referenserna är skrivna med svenska boknamn enligt Bibel 2000. Baslagret hämtas via MapLibre från en publik vektorstil och prioriterar
-          svenska kartnamn där sådana finns i datan. Internetanslutning krävs för baslagret, medan de bibliska platserna, filtren och
-          berättelsespåren ingår i appens statiska JavaScript.
+          Baslager: OpenFreeMap via MapLibre. Svenska kartnamn visas när vektordatan innehåller dem.
         </p>
       </section>
 
