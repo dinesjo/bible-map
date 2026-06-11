@@ -1,0 +1,7 @@
+services:
+  bible-map:
+    image: ghcr.io/dinesjo/bible-map:latest
+    container_name: bible-map
+    restart: unless-stopped
+    ports:
+      - "8080:80"
