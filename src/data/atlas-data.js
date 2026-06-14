@@ -14,8 +14,8 @@ export const eraMeta = {
 };
 
 export const bookOrder = [
-  "1 Mos", "2 Mos", "3 Mos", "4 Mos", "5 Mos", "Jos", "Rut", "1 Sam", "2 Sam", "1 Kung", "2 Kung", "Ps",
-  "Jes", "Jona", "Nah", "Dan", "Est", "Neh", "Matt", "Mark", "Luk", "Joh", "Apg", "2 Kor", "Gal"
+  "1 Mos", "2 Mos", "3 Mos", "4 Mos", "5 Mos", "Jos", "Dom", "Rut", "1 Sam", "2 Sam", "1 Kung", "2 Kung", "2 Krön", "Ps",
+  "Jes", "Jer", "Hes", "Jona", "Nah", "Dan", "Est", "Neh", "Matt", "Mark", "Luk", "Joh", "Apg", "2 Kor", "Gal"
 ];
 
 export const featuredCharacters = [
@@ -54,7 +54,7 @@ export const storyRoutes = [
     id: "exodus_route",
     palette: "exodus",
     title: "Exodus & förbundet",
-    subtitle: "Egypten, Sinai, Nebo och Jeriko",
+    subtitle: "Egypten, Sinai, Berget Nebo och Jeriko",
     description: "Lyfter fram slaveriet i Egypten, lagen vid Sinai, utsikten från Nebo och gränsen till landet vid Jeriko.",
     locations: ["egypt", "sinai", "nebo", "jericho"]
   },
@@ -151,7 +151,7 @@ export const locations = [
     ],
     characters: ["Abraham", "Terach"],
     summary: "Ur framstår som patriarkernas tidiga utgångspunkt när Abrams familj lämnar Mesopotamien mot Kanaan.",
-    geography: "Staden låg i södra Mesopotamien nära Eufrats deltaområden."
+    geography: "Markören följer Tell el-Muqayyar i södra Mesopotamien; identifieringen av Abrahams Ur är vanlig men inte helt utan alternativa förslag."
   },
   {
     id: "harran",
@@ -167,18 +167,18 @@ export const locations = [
     eras: ["patriarker"],
     primaryBooks: ["1 Mos"],
     references: [
-      { book: "1 Mos", passages: "11:31-32; 12:4-5; 29:4" }
+      { book: "1 Mos", passages: "11:31-32; 12:4-5; 27:42-43; 28:10; 29:4-5" }
     ],
-    characters: ["Abraham", "Jakob", "Rebecka"],
-    summary: "Harran är mellanstationen där Abrams kallelse tar form och där Jakobs släktband knyts.",
+    characters: ["Abraham", "Jakob", "Rebecka", "Laban"],
+    summary: "Harran är mellanstationen där Abrams kallelse tar form och där Jakob möter Labans familj.",
     geography: "Platsen låg vid viktiga handelsleder mellan Anatolien och Syrien."
   },
   {
     id: "hebron",
     name: "Hebron",
     region: "Judeens högland",
-    lat: 31.5326,
-    lng: 35.0998,
+    lat: 31.525087,
+    lng: 35.10222,
     labelDirection: "bottom",
     labelOffset: [0, 5],
     focusZoom: 8,
@@ -187,19 +187,19 @@ export const locations = [
     eras: ["patriarker", "kungar_profeter"],
     primaryBooks: ["1 Mos", "2 Sam"],
     references: [
-      { book: "1 Mos", passages: "13:18; 18:1; 23:2" },
+      { book: "1 Mos", passages: "13:18; 23:2, 19" },
       { book: "2 Sam", passages: "2:1-4" }
     ],
     characters: ["Abraham", "Sara", "David"],
     summary: "Hebron är kopplad till patriarkernas gravar och blir också Davids första kungliga säte.",
-    geography: "Staden ligger i höglandet söder om Jerusalem."
+    geography: "Markören följer Tel Rumeida, den gamla stadshöjden; Machpelagrottan och patriarkgravarna ligger i dagens Hebron i närheten."
   },
   {
     id: "beersheba",
     name: "Beer Sheva",
     region: "Negev",
-    lat: 31.252,
-    lng: 34.791,
+    lat: 31.244722,
+    lng: 34.840833,
     labelDirection: "left",
     labelOffset: [-2, 2],
     focusZoom: 7,
@@ -212,14 +212,14 @@ export const locations = [
     ],
     characters: ["Abraham", "Isak", "Jakob"],
     summary: "Beer Sheva markerar patriarkernas södra gräns och återkommer i förbunden kring brunnar och offer.",
-    geography: "Platsen låg vid kanten av Negevöknen, där jordbruksland möter öken."
+    geography: "Markören följer Tel Beer Sheva, den starkaste arkeologiska kandidaten; patriarkberättelserna knyts också till brunnstraditioner vid Bir es Seba i dagens Beer Sheva."
   },
   {
     id: "bethel",
     name: "Betel",
     region: "Benjamins och Efraims högland",
-    lat: 31.942,
-    lng: 35.224,
+    lat: 31.922778,
+    lng: 35.241389,
     labelDirection: "left",
     labelOffset: [-10, -2],
     focusZoom: 8,
@@ -233,14 +233,14 @@ export const locations = [
     ],
     characters: ["Abraham", "Jakob", "Jerobeam"],
     summary: "Betel återkommer både i patriarkernas altaren och i det delade rikets kult, vilket gör platsen till en spegel för både löfte och avfall.",
-    geography: "Platsen låg norr om Jerusalem på höglandsleden genom Efraim."
+    geography: "Markören följer Beitin, den vanligaste identifieringen av Betel, norr om Jerusalem på höglandsleden genom Efraim."
   },
   {
     id: "shechem",
     name: "Sikem",
     region: "Samarien",
-    lat: 32.214,
-    lng: 35.272,
+    lat: 32.213611,
+    lng: 35.281944,
     labelDirection: "right",
     labelOffset: [8, -2],
     focusZoom: 8,
@@ -255,7 +255,7 @@ export const locations = [
     ],
     characters: ["Abraham", "Jakob", "Josua", "Jesus"],
     summary: "Sikem binder ihop Abrahams första ankomst, Jakobs bosättning, Josuas förbundsförnyelse och Jesu möte nära Sykar.",
-    geography: "Platsen låg mellan bergen Gerissim och Ebal i centrala Samarien."
+    geography: "Markören följer Tell Balata, mellan bergen Gerissim och Ebal; Joh 4 gäller Sykar/Jakobs brunn i Sikemområdet, där identifieringen ofta knyts till Askar eller Sikemtraditionen."
   },
   {
     id: "egypt",
@@ -277,7 +277,7 @@ export const locations = [
     ],
     characters: ["Josef", "Mose", "Maria", "Jesus"],
     summary: "Egypten är både platsen för Josefs räddning och slaveriet som leder till uttåget; senare flyr Jesu familj hit.",
-    geography: "Här avses främst Nilens delta och de nordöstra gränsområdena."
+    geography: "Markören är en representativ punkt i nordöstra Nildeltat; bibeltexterna avser främst Egypten som rike och Goshen/Ramsesområdet, inte en enskild stad."
   },
   {
     id: "sinai",
@@ -294,18 +294,18 @@ export const locations = [
     primaryBooks: ["2 Mos", "3 Mos", "4 Mos"],
     references: [
       { book: "2 Mos", passages: "19-34" },
-      { book: "3 Mos", passages: "1:1" },
+      { book: "3 Mos", passages: "7:38; 25:1; 26:46; 27:34" },
       { book: "4 Mos", passages: "1:1; 10:11-12" }
     ],
     characters: ["Mose", "Aron"],
     summary: "Vid Sinai sluts förbundet, lagen ges och Israels ökenvandring får sin liturgiska form.",
-    geography: "Den traditionella Sinai-regionen ligger mellan Egypten och landet Kanaan."
+    geography: "Markören ligger vid den traditionella Jebel Musa/Horeb i södra Sinai; den exakta platsen för bibliska Sinai är omdiskuterad."
   },
   {
     id: "nebo",
-    name: "Nebo",
-    region: "Moab",
-    lat: 31.765,
+    name: "Berget Nebo",
+    region: "Moab / Pisga",
+    lat: 31.7651,
     lng: 35.725,
     labelDirection: "right",
     labelOffset: [10, -4],
@@ -318,15 +318,15 @@ export const locations = [
       { book: "5 Mos", passages: "32:48-52; 34:1-4" }
     ],
     characters: ["Mose"],
-    summary: "Från Nebo ser Mose landet innan sin död, vilket gör berget till gränsen mellan löftet och intåget.",
-    geography: "Bergsryggen ligger öster om Jordan och norra Döda havet i Moabs land."
+    summary: "Från Nebo/Pisgas topp ser Mose landet innan sin död, vilket gör berget till gränsen mellan löftet och intåget.",
+    geography: "Markören följer den traditionella Rujm Siyaghah/Jabal Nebo-platsen i Abarimbergen öster om Jordan; Pisgas exakta utsträckning är osäker."
   },
   {
     id: "jericho",
     name: "Jeriko",
     region: "Jordandalen",
-    lat: 31.871,
-    lng: 35.444,
+    lat: 31.871719,
+    lng: 35.444564,
     labelDirection: "right",
     labelOffset: [8, -2],
     focusZoom: 8,
@@ -340,14 +340,14 @@ export const locations = [
     ],
     characters: ["Josua", "Rahab", "Jesus", "Sackaios"],
     summary: "Jeriko är porten in i landet i Josuas tid och en mötesplats i Jesu sista resa mot Jerusalem.",
-    geography: "Oasstad nordväst om Döda havet, i den djupa Jordandalen."
+    geography: "Markören följer Tell es Sultan nordväst om dagens Jeriko, GT:s Jeriko; Lukas 18-19 hör till NT:s Jeriko vid Tell el Alayiq i samma oasområde."
   },
   {
     id: "jerusalem",
     name: "Jerusalem",
     region: "Judeen",
-    lat: 31.778,
-    lng: 35.235,
+    lat: 31.776667,
+    lng: 35.234167,
     labelDirection: "top",
     labelOffset: [0, -6],
     focusZoom: 8,
@@ -363,14 +363,14 @@ export const locations = [
     ],
     characters: ["David", "Salomo", "Jesus", "Petrus", "Paulus"],
     summary: "Jerusalem är Davids stad, tempelstad, platsen för Jesu lidande och uppståndelse samt centrum för den första församlingen.",
-    geography: "Staden ligger på höjdryggen mellan Medelhavskusten och Jordandalen."
+    geography: "Markören ligger i dagens Jerusalem; berättelserna rör särskilt Davids stad, tempelområdet och den första församlingens centrum."
   },
   {
     id: "bethany",
     name: "Betania",
     region: "Öster om Jerusalem",
-    lat: 31.771,
-    lng: 35.265,
+    lat: 31.771661,
+    lng: 35.255903,
     labelDirection: "right",
     labelOffset: [10, 0],
     focusZoom: 9,
@@ -379,20 +379,20 @@ export const locations = [
     eras: ["jesu_liv"],
     primaryBooks: ["Luk", "Joh", "Mark"],
     references: [
-      { book: "Luk", passages: "10:38-42" },
+      { book: "Luk", passages: "19:29; 24:50" },
       { book: "Joh", passages: "11:1-44; 12:1-8" },
       { book: "Mark", passages: "11:1-12; 14:3-9" }
     ],
     characters: ["Maria", "Marta", "Lasarus", "Jesus"],
-    summary: "Betania ligger på sluttningen öster om Jerusalem och förknippas med Lasarus, gästfrihet och Jesu sista dagar före lidandet.",
+    summary: "Betania ligger på sluttningen öster om Jerusalem och förknippas med Lasarus, Maria, Marta och Jesu sista dagar före lidandet.",
     geography: "Byn låg på Olivbergets östra sida längs vägen från Jeriko till Jerusalem."
   },
   {
     id: "bethlehem",
     name: "Betlehem",
     region: "Judeen",
-    lat: 31.705,
-    lng: 35.202,
+    lat: 31.704306,
+    lng: 35.207639,
     labelDirection: "left",
     labelOffset: [-8, -2],
     focusZoom: 8,
@@ -414,8 +414,8 @@ export const locations = [
     id: "nazareth",
     name: "Nazaret",
     region: "Galileen",
-    lat: 32.6996,
-    lng: 35.3035,
+    lat: 32.70214,
+    lng: 35.29769,
     labelDirection: "left",
     labelOffset: [-8, -4],
     focusZoom: 8,
@@ -435,8 +435,8 @@ export const locations = [
     id: "cana",
     name: "Kana",
     region: "Nedre Galileen",
-    lat: 32.745,
-    lng: 35.338,
+    lat: 32.8222,
+    lng: 35.30269,
     labelDirection: "left",
     labelOffset: [-10, 0],
     focusZoom: 9,
@@ -446,40 +446,42 @@ export const locations = [
     primaryBooks: ["Joh"],
     references: [
       { book: "Joh", passages: "2:1-11" },
-      { book: "Joh", passages: "4:46-54" }
+      { book: "Joh", passages: "4:46-54; 21:2" }
     ],
-    characters: ["Jesus", "Maria"],
-    summary: "Kana knyts till Jesu första tecken och blir en plats där hans härlighet börjar bli synlig för lärjungarna.",
-    geography: "Byn låg nära Nazaret i Galileens inland."
+    characters: ["Jesus", "Maria", "Natanael", "kunglig ämbetsman"],
+    summary: "Kana i Galileen knyts till Jesu första tecken, helandet av ämbetsmannens son och Natanaels hemstad.",
+    geography: "Markören följer Horbat Qana/Khirbet Qana, en stark kandidat i modern bibelgeografi; den senare pilgrimstraditionen placerar ofta Kana vid Kafr Kanna."
   },
   {
     id: "galilee",
     name: "Galileen",
-    region: "Kafarnaum och sjön",
+    region: "Norra Israel / Galileiska sjön",
     lat: 32.785,
     lng: 35.545,
     labelDirection: "right",
     labelOffset: [12, -2],
     focusZoom: 8,
     palette: "jesu_liv",
-    testaments: ["NT"],
-    eras: ["jesu_liv"],
-    primaryBooks: ["Matt", "Mark", "Joh"],
+    testaments: ["GT", "NT"],
+    eras: ["exodus", "kungar_profeter", "jesu_liv"],
+    primaryBooks: ["Jos", "Jes", "Matt", "Mark", "Joh"],
     references: [
+      { book: "Jos", passages: "20:7; 21:32" },
+      { book: "Jes", passages: "9:1" },
       { book: "Matt", passages: "4:13-25" },
       { book: "Mark", passages: "1:16-39" },
       { book: "Joh", passages: "6:1-21" }
     ],
     characters: ["Jesus", "Petrus", "Andreas", "Jakob", "Johannes"],
-    summary: "Kring Galileiska sjön sker många kallelser, undervisningar, båtfärder och undergärningar.",
-    geography: "Här avses området runt sjön och Kafarnaum i nordligaste delen av Israel."
+    summary: "Galileen nämns redan som nordlig region i GT och blir i evangelierna centrum för många kallelser, undervisningar och undergärningar.",
+    geography: "Markören representerar Galileen kring sjön och de galileiska höjderna i norra Israel, inte en enskild stad."
   },
   {
     id: "capernaum",
     name: "Kafarnaum",
     region: "Galileiska sjöns nordkust",
-    lat: 32.8809,
-    lng: 35.5735,
+    lat: 32.881111,
+    lng: 35.575,
     labelDirection: "top",
     labelOffset: [0, -10],
     focusZoom: 9,
@@ -492,14 +494,14 @@ export const locations = [
       { book: "Mark", passages: "1:21-34; 2:1-12" },
       { book: "Joh", passages: "6:24-59" }
     ],
-    characters: ["Jesus", "Petrus", "Matteus"],
-    summary: "Kafarnaum blir nav för Jesu undervisning, helanden och kallelser vid Galileiska sjön.",
-    geography: "Platsen låg på sjöns nordvästra strand och fungerade som bas för stora delar av Jesu galileiska tjänst."
+    characters: ["Jesus", "Petrus"],
+    summary: "Kafarnaum blir nav för Jesu undervisning, helanden och konfrontationer vid Galileiska sjön.",
+    geography: "Markören följer Tell Hum på sjöns nordvästra strand, den starkaste identifieringen; Khirbet Minyeh är en svagare alternativ kandidat."
   },
   {
     id: "samaria",
     name: "Samaria",
-    region: "Nordrikets huvudlandskap",
+    region: "Nordrikets huvudstad och samariska regionen",
     lat: 32.276,
     lng: 35.197,
     labelDirection: "left",
@@ -516,8 +518,8 @@ export const locations = [
       { book: "Apg", passages: "8:4-8, 14-17" }
     ],
     characters: ["Omri", "Ahab", "Jesus", "Filippos", "Petrus", "Johannes"],
-    summary: "Samaria är Nordrikets huvudstad och senare ett gränsland där både Jesus och den första missionen bryter gamla murar.",
-    geography: "Här avses den centrala samariska höjdregionen mellan Judeen och Galileen."
+    summary: "Staden Samaria blev Nordrikets huvudstad; i NT kan Samaria också syfta på regionen där Jesus och den första missionen bryter gamla murar.",
+    geography: "Markören ligger vid Sebaste, den forna huvudstaden; NT-referenserna kan avse den bredare regionen mellan Judeen och Galileen."
   },
   {
     id: "carmel",
@@ -537,12 +539,12 @@ export const locations = [
     ],
     characters: ["Elia", "Ahab"],
     summary: "På Karmelberget ställs Herren mot Baalsprofeterna i en av GT:s mest dramatiska uppgörelser.",
-    geography: "Bergsryggen skjuter ut mot Medelhavet söder om dagens Haifa."
+    geography: "Markören representerar Karmelbergets rygg, som skjuter ut mot Medelhavet söder om dagens Haifa; texten anger berget, inte en exakt punkt på ryggen."
   },
   {
     id: "joppa",
     name: "Joppe",
-    region: "Filisteiska kusten",
+    region: "Medelhavskusten",
     lat: 32.05,
     lng: 34.75,
     labelDirection: "left",
@@ -550,35 +552,38 @@ export const locations = [
     focusZoom: 8,
     palette: "urkyrkan",
     testaments: ["GT", "NT"],
-    eras: ["kungar_profeter", "urkyrkan"],
-    primaryBooks: ["Jona", "Apg"],
+    eras: ["exodus", "kungar_profeter", "urkyrkan"],
+    primaryBooks: ["Jos", "2 Krön", "Jona", "Apg"],
     references: [
+      { book: "Jos", passages: "19:46" },
+      { book: "2 Krön", passages: "2:16" },
       { book: "Jona", passages: "1:3" },
       { book: "Apg", passages: "9:36-43; 10:5-23" }
     ],
     characters: ["Jona", "Petrus", "Tabita"],
-    summary: "Joppe är hamnstaden där Jona försöker fly och där Petrus får synen som öppnar vägen mot hedningarna.",
-    geography: "Den gamla hamnstaden låg vid Medelhavskusten söder om Caesarea."
+    summary: "Joppe är hamnstaden vid Jaffa: en gränspunkt för Dan, en hamn för tempelvirke, Jonas flyktväg och platsen där Petrus får synen som öppnar vägen mot hedningarna.",
+    geography: "Den gamla hamnstaden låg vid Medelhavskusten söder om Caesarea, i dagens Jaffa/Tel Aviv."
   },
   {
     id: "gaza",
     name: "Gaza",
     region: "Sydvästra kustslätten",
-    lat: 31.501,
-    lng: 34.466,
+    lat: 31.504,
+    lng: 34.4644,
     labelDirection: "left",
     labelOffset: [-10, 0],
     focusZoom: 8,
     palette: "urkyrkan",
-    testaments: ["NT"],
-    eras: ["urkyrkan"],
-    primaryBooks: ["Apg"],
+    testaments: ["GT", "NT"],
+    eras: ["kungar_profeter", "urkyrkan"],
+    primaryBooks: ["Dom", "Apg"],
     references: [
+      { book: "Dom", passages: "16:1-3, 21" },
       { book: "Apg", passages: "8:26-40" }
     ],
-    characters: ["Filippos"],
-    summary: "Vägen mot Gaza markerar det öde landskap där Filippos möter den etiopiske hovmannen och evangeliet tar ytterligare ett steg utåt.",
-    geography: "Här avses den södra kustzonen och ökenvägen mellan Jerusalem och Gaza."
+    characters: ["Simson", "Filippos", "etiopiske hovmannen"],
+    summary: "Gaza är en filisteisk stad i GT och vägen dit markerar i Apg platsen där Filippos möter den etiopiske hovmannen.",
+    geography: "Markören följer Tell Harube/Tell Azza vid den gamla stadsplatsen; Apg 8 syftar på vägen från Jerusalem mot Gaza genom ödemarken."
   },
   {
     id: "caesarea",
@@ -600,14 +605,14 @@ export const locations = [
     ],
     characters: ["Filippos", "Petrus", "Cornelius", "Paulus"],
     summary: "Caesarea är den romerska kuststaden där Cornelius döps och där Paulus försvarar sig inför ståthållare och kungar.",
-    geography: "Staden låg på kusten och fungerade som administrativt centrum i den romerska provinsen."
+    geography: "Markören avser Caesarea Maritima på Medelhavskusten, den romerska administrationsstaden i Judeen."
   },
   {
     id: "tyre",
     name: "Tyros",
     region: "Fenikiska kusten",
-    lat: 33.270,
-    lng: 35.196,
+    lat: 33.270833,
+    lng: 35.196111,
     labelDirection: "right",
     labelOffset: [8, -2],
     focusZoom: 8,
@@ -622,14 +627,14 @@ export const locations = [
     ],
     characters: ["Hiram", "Jesus", "Paulus"],
     summary: "Tyros förenar tempelbyggets fenikiska kontakter med Jesu gränsöverskridande tjänst och Paulus senare kustresa.",
-    geography: "Hamnstaden låg på den fenikiska kusten norr om Galileen."
+    geography: "Markören följer den tidigare östaden Tyros, som efter Alexanderstidens vall blev en udde på den fenikiska kusten norr om Galileen."
   },
   {
     id: "damascus",
     name: "Damaskus",
     region: "Syrien",
-    lat: 33.5138,
-    lng: 36.2765,
+    lat: 33.511112,
+    lng: 36.30639,
     labelDirection: "right",
     labelOffset: [8, -2],
     focusZoom: 7,
@@ -644,14 +649,14 @@ export const locations = [
     ],
     characters: ["Naaman", "Paulus", "Hananias"],
     summary: "Damaskus är både arameisk maktstad i GT och platsen där Saulus möter den uppståndne Kristus.",
-    geography: "Oasstad öster om Anti-Libanon och en gammal knutpunkt mellan öken och kust."
+    geography: "Markören följer den historiska stadskärnan i oasstaden öster om Anti-Libanon, en gammal knutpunkt mellan öken och kust."
   },
   {
     id: "antioch",
     name: "Antiochia",
-    region: "Syrien",
-    lat: 36.2021,
-    lng: 36.1606,
+    region: "Romerska Syrien / dagens Antakya",
+    lat: 36.226691,
+    lng: 36.171743,
     labelDirection: "top",
     labelOffset: [0, -6],
     focusZoom: 7,
@@ -665,7 +670,7 @@ export const locations = [
     ],
     characters: ["Barnabas", "Paulus", "Petrus"],
     summary: "I Antiochia får Jesu lärjungar namnet kristna och därifrån sänds missionen ut.",
-    geography: "Storstad nära Orontesdalen, mellan Medelhavet och de syriska inlandsvägarna."
+    geography: "Markören följer Antiochia vid Orontes nära dagens Antakya, mellan Medelhavet och de syriska inlandsvägarna."
   },
   {
     id: "cyprus",
@@ -677,24 +682,27 @@ export const locations = [
     labelOffset: [-10, 0],
     focusZoom: 7,
     palette: "urkyrkan",
-    testaments: ["NT"],
-    eras: ["urkyrkan"],
-    primaryBooks: ["Apg"],
+    testaments: ["GT", "NT"],
+    eras: ["kungar_profeter", "urkyrkan"],
+    primaryBooks: ["Jes", "Jer", "Hes", "Apg"],
     references: [
+      { book: "Jes", passages: "23:1, 12" },
+      { book: "Jer", passages: "2:10" },
+      { book: "Hes", passages: "27:6" },
       { book: "Apg", passages: "4:36" },
       { book: "Apg", passages: "13:4-12" },
       { book: "Apg", passages: "15:39" }
     ],
     characters: ["Barnabas", "Paulus", "Johannes Markus"],
-    summary: "Cypern förknippas med Barnabas och blir ett av de första tydliga missionella stegen ut i den östra medelhavsvärlden.",
-    geography: "Ön ligger väster om Syrien och söder om Anatolien som en naturlig bro mellan kustregionerna."
+    summary: "Cypern, Kittim i flera profettexter, förknippas med Barnabas och blir ett av de första tydliga missionella stegen ut i den östra medelhavsvärlden.",
+    geography: "Markören är representativ för ön väster om Syrien och söder om Anatolien, en naturlig bro mellan kustregionerna."
   },
   {
     id: "tarsus",
     name: "Tarsos",
     region: "Kilikien",
-    lat: 36.9167,
-    lng: 34.892,
+    lat: 36.913028,
+    lng: 34.892056,
     labelDirection: "left",
     labelOffset: [-8, -8],
     focusZoom: 7,
@@ -707,7 +715,7 @@ export const locations = [
     ],
     characters: ["Paulus"],
     summary: "Tarsos är Paulus hemstad och markerar den grekisk-romerska horisont som formar hans uppdrag.",
-    geography: "Staden låg i Kilikien på Anatoliens sydöstra kustslätt."
+    geography: "Markören följer den arkeologiska platsen i dagens Tarsos i Kilikien på Anatoliens sydöstra kustslätt."
   },
   {
     id: "perge",
@@ -726,9 +734,9 @@ export const locations = [
       { book: "Apg", passages: "13:13-14" },
       { book: "Apg", passages: "14:24-25" }
     ],
-    characters: ["Paulus", "Barnabas", "Johannes Markus"],
-    summary: "Perge är en av de första anatoliska platserna på Paulus och Barnabas väg in från kusten mot inlandet.",
-    geography: "Staden låg i Pamfyliens slättland en bit in från Anatoliens sydkust."
+    characters: ["Paulus", "Johannes Markus"],
+    summary: "Perge är en av de första anatoliska platserna på Paulus väg in från kusten mot inlandet, och här lämnar Johannes Markus följet.",
+    geography: "Markören följer ruinerna av Perge/Perga i Pamfyliens slättland en bit in från Anatoliens sydkust."
   },
   {
     id: "ephesus",
@@ -744,20 +752,20 @@ export const locations = [
     eras: ["urkyrkan"],
     primaryBooks: ["Apg"],
     references: [
-      { book: "Apg", passages: "18:19-21" },
+      { book: "Apg", passages: "18:18-28" },
       { book: "Apg", passages: "19:1-41" },
       { book: "Apg", passages: "20:17-38" }
     ],
     characters: ["Paulus", "Apollos", "Priscilla", "Aquila"],
     summary: "Efesos blir ett av den tidiga kyrkans starkaste urbana centra där undervisning, konflikt och församlingstillväxt möts.",
-    geography: "Staden låg nära Egeiska havet i västra Mindre Asien och var en nyckelhamn för regionen."
+    geography: "Efesos låg vid Kaystros gamla flodmynning och var en romersk hamnstad; ruinerna ligger idag längre inåt land efter sedimentering."
   },
   {
     id: "nineveh",
     name: "Nineve",
     region: "Assyrien",
-    lat: 36.36,
-    lng: 43.152,
+    lat: 36.3594,
+    lng: 43.1528,
     labelDirection: "right",
     labelOffset: [8, -8],
     focusZoom: 7,
@@ -771,7 +779,7 @@ export const locations = [
     ],
     characters: ["Jona"],
     summary: "Nineve är Assyriens storstad där Jona kallas att predika omvändelse och Nahum senare uttalar dom.",
-    geography: "Låg vid Tigris i norra Mesopotamien."
+    geography: "Markören följer Nineves synliga ruiner vid Tigris i norra Mesopotamien."
   },
   {
     id: "babylon",
@@ -785,15 +793,16 @@ export const locations = [
     palette: "kungar_profeter",
     testaments: ["GT"],
     eras: ["kungar_profeter"],
-    primaryBooks: ["2 Kung", "Ps", "Dan"],
+    primaryBooks: ["2 Kung", "Ps", "Dan", "Hes"],
     references: [
       { book: "2 Kung", passages: "24-25" },
       { book: "Ps", passages: "137" },
-      { book: "Dan", passages: "1-6" }
+      { book: "Dan", passages: "1-6" },
+      { book: "Hes", passages: "1:1-3" }
     ],
     characters: ["Daniel", "Nebukadnessar", "Hesekiel"],
     summary: "Babylon står för exilen, maktens hov och de visioner som formar hoppet om återkomst.",
-    geography: "Staden låg vid Eufrat i centrala Mesopotamien."
+    geography: "Markören följer Babylon stadsruin vid Eufrat, söder om dagens Bagdad; flera exiltexter, särskilt hos Hesekiel, syftar bredare på Babylonien/Kaldéernas land."
   },
   {
     id: "susa",
@@ -811,10 +820,10 @@ export const locations = [
     references: [
       { book: "Est", passages: "1-10" },
       { book: "Neh", passages: "1:1-2:9" },
-      { book: "Dan", passages: "8:2" }
+      { book: "Dan", passages: "8:1-2" }
     ],
     characters: ["Ester", "Nehemja", "Daniel"],
     summary: "Susa är hovstad i Perserriket där Ester och Nehemja verkar nära rikets centrum.",
-    geography: "Platsen låg öster om Tigris i det elamitiska låglandet."
+    geography: "Markören följer Shush/Susa i sydvästra Iran, på Susianas slätter mellan Karkheh och Dez där Mesopotamien möter Irans högland."
   }
 ];
