@@ -33,6 +33,12 @@
   --lapis: #405f7a;
   --shadow: 0 22px 54px rgba(7, 12, 10, 0.28);
   --shadow-soft: 0 12px 26px rgba(31, 27, 20, 0.14);
+  --app-background:
+    linear-gradient(90deg, rgba(255, 246, 218, 0.035) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 246, 218, 0.026) 1px, transparent 1px),
+    radial-gradient(circle at 18% 10%, rgba(167, 99, 60, 0.2), transparent 28%),
+    linear-gradient(135deg, #111511 0%, #252119 48%, #102124 100%);
+  --app-background-size: 38px 38px, 38px 38px, 100% 100%, 100% 100%;
   --font-serif: "Newsreader", "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Baskerville, Georgia, serif;
   --font-body: "Source Sans 3", "Avenir Next", "Optima", "Gill Sans", "Trebuchet MS", sans-serif;
   --radius-card: 8px;
@@ -49,17 +55,23 @@ body {
   margin: 0;
 }
 
+html {
+  background-color: var(--bg-ink);
+  background-image: var(--app-background);
+  background-size: var(--app-background-size);
+  overscroll-behavior: none;
+}
+
 body {
+  min-height: 100svh;
   font-family: var(--font-body);
   font-optical-sizing: auto;
   color: var(--ink);
-  background:
-    linear-gradient(90deg, rgba(255, 246, 218, 0.035) 1px, transparent 1px),
-    linear-gradient(180deg, rgba(255, 246, 218, 0.026) 1px, transparent 1px),
-    radial-gradient(circle at 18% 10%, rgba(167, 99, 60, 0.2), transparent 28%),
-    linear-gradient(135deg, #111511 0%, #252119 48%, #102124 100%);
-  background-size: 38px 38px, 38px 38px, 100% 100%, 100% 100%;
+  background-color: var(--bg-ink);
+  background-image: var(--app-background);
+  background-size: var(--app-background-size);
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 html.sheet-open,

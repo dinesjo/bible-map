@@ -1,6 +1,5 @@
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import "./styles.css";
 import {
   INITIAL_MAP_BOUNDS,
   HARD_MAP_BOUNDS,
