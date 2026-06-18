@@ -36,6 +36,7 @@ const placeList = document.getElementById("placeList");
 const searchInput = document.getElementById("searchInput");
 const summaryText = document.getElementById("summaryText");
 const visibleCount = document.getElementById("visibleCount");
+const activeFilterCount = document.getElementById("activeFilterCount");
 const listCounter = document.getElementById("listCounter");
 const legendList = document.getElementById("legendList");
 const activeFilters = document.getElementById("activeFilters");
@@ -45,15 +46,29 @@ const zoomIn = document.getElementById("zoomIn");
 const zoomOut = document.getElementById("zoomOut");
 const zoomHome = document.getElementById("zoomHome");
 const clearFilters = document.getElementById("clearFilters");
-const focusSelection = document.getElementById("focusSelection");
+const filterDone = document.getElementById("filterDone");
 const mapStage = document.getElementById("mapStage");
 const mapFallback = document.getElementById("mapFallback");
+const filterToggle = document.getElementById("filterToggle");
+const filterPanel = document.getElementById("filterPanel");
+const filterClose = document.getElementById("filterClose");
+const placesToggle = document.getElementById("placesToggle");
+const placesPanel = document.getElementById("placesPanel");
+const placesClose = document.getElementById("placesClose");
+const drawerScrim = document.getElementById("drawerScrim");
+const modalSiblings = [
+  document.querySelector(".atlas-bar"),
+  document.querySelector(".map-panel"),
+  document.getElementById("inspectorPanel")
+].filter(Boolean);
 
 let map = null;
 let mapLoaded = false;
 let activePointMarkers = [];
 let activeLabelMarkers = [];
 let fallbackTimer = 0;
+let openDrawer = null;
+let drawerReturnFocus = null;
 
 function syncCompass() {
   if (!mapLoaded || !map) {
@@ -61,6 +76,57 @@ function syncCompass() {
     return;
   }
   compassReset.style.setProperty("--compass-rotation", `${-map.getBearing()}deg`);
+}
+
+function setDrawer(name, open) {
+  const wasOpen = Boolean(openDrawer);
+  openDrawer = open ? name : null;
+
+  const filtersOpen = openDrawer === "filters";
+  const placesOpen = openDrawer === "places";
+  const hasOpenPanel = filtersOpen || placesOpen;
+
+  if (hasOpenPanel && !wasOpen) {
+    drawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+
+  document.body.classList.toggle("sheet-open", filtersOpen);
+  document.body.classList.toggle("filters-open", filtersOpen);
+  document.body.classList.toggle("places-open", placesOpen);
+  filterPanel.setAttribute("aria-hidden", String(!filtersOpen));
+  placesPanel.setAttribute("aria-hidden", String(!placesOpen));
+  filterToggle.setAttribute("aria-expanded", String(filtersOpen));
+  placesToggle.setAttribute("aria-expanded", String(placesOpen));
+  drawerScrim.hidden = !filtersOpen;
+
+  modalSiblings.forEach((element) => {
+    if (filtersOpen) {
+      element.setAttribute("inert", "");
+    } else {
+      element.removeAttribute("inert");
+    }
+  });
+
+  if (filtersOpen) filterClose.focus({ preventScroll: true });
+  if (placesOpen) placesClose.focus({ preventScroll: true });
+  if (!hasOpenPanel && drawerReturnFocus) {
+    drawerReturnFocus.focus({ preventScroll: true });
+    drawerReturnFocus = null;
+  }
+}
+
+function closeDrawers() {
+  setDrawer(null, false);
+}
+
+function getActiveFilterTokens() {
+  const tokens = [];
+  if (state.testament !== "alla") tokens.push(state.testament === "GT" ? "GT" : "NT");
+  if (state.era !== "alla") tokens.push(eraMeta[state.era].label);
+  if (state.book !== "alla") tokens.push(state.book);
+  if (state.character !== "alla") tokens.push(state.character);
+  if (state.search.trim()) tokens.push(`"${state.search.trim()}"`);
+  return tokens;
 }
 
 function escapeHtml(value) {
@@ -157,8 +223,18 @@ function getRoutePalette(route) {
   return eraMeta[route.palette] || eraMeta[route.id] || eraMeta.jesu_liv;
 }
 
-function buildFilterChip(label, active, dataset) {
-  return `<button class="toggle-chip${active ? " is-active" : ""}" type="button" ${dataset}>${escapeHtml(label)}</button>`;
+function buildFilterChip(label, active, dataset, className = "toggle-chip", prefix = "") {
+  return `<button class="${className}${active ? " is-active" : ""}" type="button" ${dataset}>${prefix}${escapeHtml(label)}</button>`;
+}
+
+function buildEraChip(key, value, active) {
+  return buildFilterChip(
+    value.label,
+    active,
+    `data-era="${key}"`,
+    "toggle-chip era-chip",
+    `<span class="chip-swatch" style="background:${value.color};"></span>`
+  );
 }
 
 function getRouteOptions() {
@@ -173,7 +249,7 @@ function getRouteOptions() {
 }
 
 function getRouteLabel(option) {
-  return `${option.title} - ${option.subtitle}`;
+  return option.title;
 }
 
 function getCurrentRouteOption() {
@@ -222,6 +298,7 @@ function toggleRouteMenu() {
 
 function selectRouteOption(routeId) {
   closeRouteMenu();
+  closeDrawers();
   handleRouteSelection(routeId);
 }
 
@@ -360,7 +437,7 @@ function renderStaticControls() {
   eraFilters.innerHTML = [
     buildFilterChip("Alla epoker", state.era === "alla", 'data-era="alla"'),
     ...Object.entries(eraMeta).map(([key, value]) =>
-      buildFilterChip(value.label, state.era === key, `data-era="${key}"`)
+      buildEraChip(key, value, state.era === key)
     )
   ].join("");
 
@@ -375,20 +452,22 @@ function renderStaticControls() {
 
   characterFilters.innerHTML = [
     `<button class="character-button${state.character === "alla" ? " is-active" : ""}" type="button" data-character="alla">
-      <span class="character-copy"><strong>Alla gestalter</strong><span>Visa hela persongalleriet</span></span>
+      <span class="character-copy"><strong>Alla gestalter</strong></span>
     </button>`,
     ...featuredCharacters.map((character) => `
-      <button class="character-button${state.character === character.name ? " is-active" : ""}" type="button" data-character="${character.name}">
-        <span class="character-copy"><strong>${escapeHtml(character.name)}</strong><span>${escapeHtml(character.note)}</span></span>
+      <button class="character-button${state.character === character.name ? " is-active" : ""}" type="button" data-character="${character.name}" title="${escapeHtml(character.note)}">
+        <span class="character-copy"><strong>${escapeHtml(character.name)}</strong></span>
       </button>
     `)
   ].join("");
 
-  legendList.innerHTML = Object.values(eraMeta).map((entry) => `
-    <span class="small-chip">
-      <span class="legend-swatch" style="background:${entry.color};"></span>${escapeHtml(entry.label)}
-    </span>
-  `).join("");
+  if (legendList) {
+    legendList.innerHTML = Object.values(eraMeta).map((entry) => `
+      <span class="small-chip">
+        <span class="legend-swatch" style="background:${entry.color};"></span>${escapeHtml(entry.label)}
+      </span>
+    `).join("");
+  }
 
   testamentFilters.querySelectorAll("[data-testament]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -420,22 +499,22 @@ function renderStaticControls() {
 }
 
 function renderActiveFilters(visibleLocations) {
-  const tokens = [];
-  if (state.testament !== "alla") tokens.push(state.testament === "GT" ? "Gamla testamentet" : "Nya testamentet");
-  if (state.era !== "alla") tokens.push(eraMeta[state.era].label);
-  if (state.book !== "alla") tokens.push(state.book);
-  if (state.character !== "alla") tokens.push(state.character);
-  if (state.search.trim()) tokens.push(`Sökning: “${state.search.trim()}”`);
+  const tokens = getActiveFilterTokens();
+  activeFilterCount.textContent = String(tokens.length);
+  activeFilterCount.hidden = tokens.length === 0;
 
   if (!tokens.length) {
-    activeFilters.innerHTML = `<span class="tag">Inga extra filter • ${visibleLocations.length} platser synliga</span>`;
+    activeFilters.innerHTML = `<span class="status-pill">${visibleLocations.length} platser</span>`;
     return;
   }
 
+  const visibleTokens = tokens.slice(0, 3);
+  const remainder = tokens.length - visibleTokens.length;
   activeFilters.innerHTML = [
-    ...tokens.map((token) => `<span class="tag">${escapeHtml(token)}</span>`),
-    `<span class="tag">${visibleLocations.length} platser synliga</span>`
-  ].join("");
+    ...visibleTokens.map((token) => `<span class="tag">${escapeHtml(token)}</span>`),
+    remainder ? `<span class="tag">+${remainder}</span>` : "",
+    `<span class="status-pill">${visibleLocations.length} platser</span>`
+  ].filter(Boolean).join(" ");
 }
 
 function formatRefChip(ref) {
@@ -461,6 +540,14 @@ function renderDetails(location, visibleLocations) {
     .filter((route) => route.locations.includes(location.id))
     .map((route) => `<span class="small-chip">${escapeHtml(route.title)}</span>`)
     .join("");
+  const referencePreview = location.references.slice(0, 4).map(formatRefChip).join("");
+  const route = getActiveRoute();
+  const routePosition = route && route.locations.includes(location.id)
+    ? route.locations.indexOf(location.id) + 1
+    : null;
+  const routeNote = routePosition
+    ? `<span class="route-step">Steg ${routePosition} i ${escapeHtml(route.title)}</span>`
+    : "";
 
   detailCard.innerHTML = `
     <p class="section-label">Vald plats</p>
@@ -469,38 +556,44 @@ function renderDetails(location, visibleLocations) {
         <h2 class="detail-title">${escapeHtml(location.name)}</h2>
         <span class="detail-region">${escapeHtml(location.region)}</span>
       </div>
-      <span class="small-chip">${escapeHtml(location.primaryBooks.join(" • "))}</span>
+      ${routeNote}
     </div>
     <p class="detail-summary">${escapeHtml(location.summary)}</p>
-    <div class="detail-chip-row">${eraChips}${testamentChips}</div>
-    <div class="group-block">
-      <h3>Var nämns platsen?</h3>
-      <div class="ref-stack">${location.references.map(formatRefChip).join("")}</div>
-    </div>
-    ${relatedRoutes ? `
-      <div class="group-block">
-        <h3>Berättelsespår som passerar här</h3>
-        <div class="detail-chip-row">${relatedRoutes}</div>
-      </div>
-    ` : ""}
-    <div class="detail-grid">
-      <div class="fact-box">
-        <span>Framträdande personer</span>
-        <strong>${escapeHtml([...new Set(location.characters)].join(", "))}</strong>
-      </div>
-      <div class="fact-box">
-        <span>Geografisk notis</span>
-        <strong>${escapeHtml(location.geography)}</strong>
-      </div>
-    </div>
-    <div class="group-block">
-      <h3>Gestalter på platsen</h3>
-      <div class="detail-chip-row">${characters}</div>
+    <div class="reference-line">
+      ${referencePreview}
+      ${location.references.length > 4 ? `<span class="ref-more">+${location.references.length - 4}</span>` : ""}
     </div>
     <div class="detail-actions">
       <button class="ghost-button is-active" id="detailFocusButton" type="button">Visa på kartan</button>
       <button class="ghost-button" id="detailNextButton" type="button">Nästa synliga plats</button>
     </div>
+    <details class="detail-more">
+      <summary>Mer om platsen</summary>
+      <div class="detail-more-grid">
+        <div class="group-block">
+          <h3>Lager</h3>
+          <div class="detail-chip-row">${eraChips}${testamentChips}</div>
+        </div>
+        <div class="group-block">
+          <h3>Alla hänvisningar</h3>
+          <div class="ref-stack">${location.references.map(formatRefChip).join("")}</div>
+        </div>
+        ${relatedRoutes ? `
+          <div class="group-block">
+            <h3>Berättelsespår</h3>
+            <div class="detail-chip-row">${relatedRoutes}</div>
+          </div>
+        ` : ""}
+        <div class="group-block">
+          <h3>Gestalter</h3>
+          <div class="detail-chip-row">${characters}</div>
+        </div>
+        <div class="fact-box">
+          <span>Geografisk notis</span>
+          <strong>${escapeHtml(location.geography)}</strong>
+        </div>
+      </div>
+    </details>
   `;
 
   const currentIndex = visibleLocations.findIndex((item) => item.id === location.id);
@@ -509,10 +602,10 @@ function renderDetails(location, visibleLocations) {
   document.getElementById("detailFocusButton").addEventListener("click", () => focusOnLocations([location.id], true));
   document.getElementById("detailNextButton").addEventListener("click", () => {
     if (!nextLocation) return;
-    state.selectedId = nextLocation.id;
-    renderAll();
-    focusOnLocations([nextLocation.id], true);
-  });
+      state.selectedId = nextLocation.id;
+      renderAll();
+      focusOnLocations([nextLocation.id], true);
+    });
 }
 
 function renderPlaceList(visibleLocations) {
@@ -521,22 +614,21 @@ function renderPlaceList(visibleLocations) {
     return;
   }
 
-  placeList.innerHTML = visibleLocations.map((location) => `
+  placeList.innerHTML = visibleLocations.map((location, index) => `
     <button class="place-row${state.selectedId === location.id ? " is-selected" : ""}" type="button" data-place="${location.id}">
-      <div>
+      <span class="place-index">${String(index + 1).padStart(2, "0")}</span>
+      <div class="place-row-copy">
         <small>${escapeHtml(location.region)}</small>
         <strong>${escapeHtml(location.name)}</strong>
       </div>
-      <div class="place-meta">
-        ${location.references.map((item) => `<span class="small-chip">${escapeHtml(item.book)}</span>`).join("")}
-      </div>
-      <p>${escapeHtml(location.summary)}</p>
+      <span class="place-books">${escapeHtml(location.primaryBooks.slice(0, 3).join(" • "))}</span>
     </button>
   `).join("");
 
   placeList.querySelectorAll("[data-place]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedId = button.dataset.place;
+      closeDrawers();
       renderAll();
       focusOnLocations([state.selectedId], true);
     });
@@ -546,10 +638,11 @@ function renderPlaceList(visibleLocations) {
 function renderSummary(visibleLocations) {
   const route = getActiveRoute();
   visibleCount.textContent = String(visibleLocations.length);
+  placesToggle.setAttribute("aria-label", `Visa ${visibleLocations.length} synliga platser`);
   listCounter.textContent = `${visibleLocations.length} plats${visibleLocations.length === 1 ? "" : "er"}`;
 
   if (!route) {
-    summaryText.textContent = "Välj ett berättelsespår för att låta kartan markera en resa eller en historisk båge genom regionerna.";
+    summaryText.textContent = "Hela kartan visas.";
     return;
   }
 
@@ -568,13 +661,12 @@ function renderMiniCard(location) {
   const route = getActiveRoute();
   const books = location.primaryBooks.slice(0, 3).join(" • ");
   const routeNote = route && route.locations.includes(location.id)
-    ? `<span class="mini-card-route">Ingår i ${escapeHtml(route.title)}</span>`
+    ? `<span class="mini-card-route">${escapeHtml(route.title)}</span>`
     : "";
 
   miniCard.innerHTML = `
     <strong>${escapeHtml(location.name)}</strong>
     <span class="mini-card-meta">${escapeHtml(location.region)} • ${escapeHtml(books)}</span>
-    <span>${escapeHtml(location.summary)}</span>
     ${routeNote}
   `;
 }
@@ -951,6 +1043,23 @@ function renderAll() {
   renderMap(visibleLocations);
 }
 
+filterToggle.addEventListener("click", () => {
+  setDrawer("filters", openDrawer !== "filters");
+});
+
+filterClose.addEventListener("click", closeDrawers);
+
+placesToggle.addEventListener("click", () => {
+  setDrawer("places", openDrawer !== "places");
+});
+
+placesClose.addEventListener("click", closeDrawers);
+drawerScrim.addEventListener("click", closeDrawers);
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && openDrawer) closeDrawers();
+});
+
 zoomIn.addEventListener("click", () => {
   if (!mapLoaded || !map) return;
   map.zoomIn();
@@ -986,10 +1095,7 @@ clearFilters.addEventListener("click", () => {
   renderAll();
 });
 
-focusSelection.addEventListener("click", () => {
-  if (!state.selectedId) return;
-  focusOnLocations([state.selectedId], true);
-});
+filterDone?.addEventListener("click", closeDrawers);
 
 mapStage.addEventListener("keydown", (event) => {
   if (!mapLoaded || !map) return;
