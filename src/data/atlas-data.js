@@ -2,7 +2,7 @@ export const INITIAL_MAP_BOUNDS = [[25.4, 23.6], [50.9, 38.9]];
 export const HARD_MAP_BOUNDS = [[22.5, 19.0], [56.0, 41.6]];
 export const anchorLabelIds = new Set([
   "egypt", "sinai", "jerusalem", "galilee", "damascus", "babylon", "susa", "harran", "ur", "antioch",
-  "samaria", "caesarea", "nebo", "bethel", "tyre", "cyprus", "ephesus"
+  "samaria", "caesarea", "nebo", "bethel", "tyre", "cyprus", "ephesus", "nineveh"
 ]);
 
 export const eraMeta = {

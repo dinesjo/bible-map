@@ -23,6 +23,8 @@ const state = {
   selectedId: "jerusalem"
 };
 
+const LABEL_DETAIL_ZOOM = 5.45;
+
 const routePicker = document.getElementById("routePicker");
 const routePickerButton = document.getElementById("routePickerButton");
 const routePickerText = document.getElementById("routePickerText");
@@ -56,9 +58,13 @@ const placesToggle = document.getElementById("placesToggle");
 const placesPanel = document.getElementById("placesPanel");
 const placesClose = document.getElementById("placesClose");
 const drawerScrim = document.getElementById("drawerScrim");
-const modalSiblings = [
+const filterModalSiblings = [
   document.querySelector(".atlas-bar"),
   document.querySelector(".map-panel"),
+  document.getElementById("inspectorPanel")
+].filter(Boolean);
+const placesModalSiblings = [
+  document.querySelector(".atlas-bar"),
   document.getElementById("inspectorPanel")
 ].filter(Boolean);
 
@@ -78,7 +84,25 @@ function syncCompass() {
   compassReset.style.setProperty("--compass-rotation", `${-map.getBearing()}deg`);
 }
 
+function setOverlayInert(filtersOpen, placesOpen) {
+  const elements = new Set([...filterModalSiblings, ...placesModalSiblings]);
+  elements.forEach((element) => {
+    const inert = (filtersOpen && filterModalSiblings.includes(element))
+      || (placesOpen && placesModalSiblings.includes(element));
+
+    if (inert) {
+      element.setAttribute("inert", "");
+    } else {
+      element.removeAttribute("inert");
+    }
+  });
+}
+
 function setDrawer(name, open) {
+  if (open && !routeMenu.hidden) closeRouteMenu();
+
+  const scrollLeft = window.scrollX;
+  const scrollTop = window.scrollY;
   const wasOpen = Boolean(openDrawer);
   openDrawer = open ? name : null;
 
@@ -87,28 +111,35 @@ function setDrawer(name, open) {
   const hasOpenPanel = filtersOpen || placesOpen;
 
   if (hasOpenPanel && !wasOpen) {
-    drawerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const fallbackFocus = name === "filters" ? filterToggle : placesToggle;
+    const activeElementIsUsable = activeElement
+      && activeElement !== document.body
+      && !filterPanel.contains(activeElement)
+      && !placesPanel.contains(activeElement);
+    drawerReturnFocus = activeElementIsUsable ? activeElement : fallbackFocus;
   }
 
-  document.body.classList.toggle("sheet-open", filtersOpen);
+  document.documentElement.classList.toggle("sheet-open", hasOpenPanel);
+  document.body.classList.toggle("sheet-open", hasOpenPanel);
   document.body.classList.toggle("filters-open", filtersOpen);
   document.body.classList.toggle("places-open", placesOpen);
   filterPanel.setAttribute("aria-hidden", String(!filtersOpen));
   placesPanel.setAttribute("aria-hidden", String(!placesOpen));
+  filterPanel.setAttribute("aria-modal", String(filtersOpen));
+  placesPanel.setAttribute("aria-modal", String(placesOpen));
   filterToggle.setAttribute("aria-expanded", String(filtersOpen));
   placesToggle.setAttribute("aria-expanded", String(placesOpen));
   drawerScrim.hidden = !filtersOpen;
 
-  modalSiblings.forEach((element) => {
-    if (filtersOpen) {
-      element.setAttribute("inert", "");
-    } else {
-      element.removeAttribute("inert");
-    }
-  });
+  setOverlayInert(filtersOpen, placesOpen);
 
   if (filtersOpen) filterClose.focus({ preventScroll: true });
   if (placesOpen) placesClose.focus({ preventScroll: true });
+  if (hasOpenPanel) {
+    window.scrollTo(scrollLeft, scrollTop);
+    requestAnimationFrame(() => window.scrollTo(scrollLeft, scrollTop));
+  }
   if (!hasOpenPanel && drawerReturnFocus) {
     drawerReturnFocus.focus({ preventScroll: true });
     drawerReturnFocus = null;
@@ -272,6 +303,8 @@ function focusRouteOption(option) {
 }
 
 function openRouteMenu(focusSelected = false) {
+  if (openDrawer) closeDrawers();
+
   routePicker.classList.add("is-open");
   routePickerButton.setAttribute("aria-expanded", "true");
   routeMenu.hidden = false;
@@ -532,15 +565,15 @@ function renderDetails(location, visibleLocations) {
   }
 
   const eraChips = location.eras.map((era) => `<span class="small-chip">${escapeHtml(eraMeta[era].label)}</span>`).join("");
-  const testamentChips = location.testaments.map((testament) => `
-    <span class="small-chip">${testament === "GT" ? "Gamla testamentet" : "Nya testamentet"}</span>
-  `).join("");
+  const testamentLabels = location.testaments.map((testament) => testament === "GT" ? "Gamla testamentet" : "Nya testamentet");
   const characters = [...new Set(location.characters)].map((character) => `<span class="small-chip">${escapeHtml(character)}</span>`).join("");
-  const relatedRoutes = storyRoutes
+  const relatedRouteList = storyRoutes
     .filter((route) => route.locations.includes(location.id))
-    .map((route) => `<span class="small-chip">${escapeHtml(route.title)}</span>`)
+    .map((route) => route.title);
+  const relatedRoutes = relatedRouteList
+    .map((title) => `<span class="small-chip">${escapeHtml(title)}</span>`)
     .join("");
-  const referencePreview = location.references.slice(0, 4).map(formatRefChip).join("");
+  const references = location.references.map(formatRefChip).join("");
   const route = getActiveRoute();
   const routePosition = route && route.locations.includes(location.id)
     ? route.locations.indexOf(location.id) + 1
@@ -559,41 +592,46 @@ function renderDetails(location, visibleLocations) {
       ${routeNote}
     </div>
     <p class="detail-summary">${escapeHtml(location.summary)}</p>
-    <div class="reference-line">
-      ${referencePreview}
-      ${location.references.length > 4 ? `<span class="ref-more">+${location.references.length - 4}</span>` : ""}
-    </div>
     <div class="detail-actions">
       <button class="ghost-button is-active" id="detailFocusButton" type="button">Visa på kartan</button>
       <button class="ghost-button" id="detailNextButton" type="button">Nästa synliga plats</button>
     </div>
-    <details class="detail-more">
-      <summary>Mer om platsen</summary>
-      <div class="detail-more-grid">
-        <div class="group-block">
-          <h3>Lager</h3>
-          <div class="detail-chip-row">${eraChips}${testamentChips}</div>
-        </div>
-        <div class="group-block">
-          <h3>Alla hänvisningar</h3>
-          <div class="ref-stack">${location.references.map(formatRefChip).join("")}</div>
-        </div>
-        ${relatedRoutes ? `
-          <div class="group-block">
-            <h3>Berättelsespår</h3>
-            <div class="detail-chip-row">${relatedRoutes}</div>
-          </div>
-        ` : ""}
-        <div class="group-block">
-          <h3>Gestalter</h3>
-          <div class="detail-chip-row">${characters}</div>
-        </div>
-        <div class="fact-box">
-          <span>Geografisk notis</span>
-          <strong>${escapeHtml(location.geography)}</strong>
-        </div>
+    <div class="detail-meta-grid">
+      <div class="detail-stat">
+        <span>Bibelböcker</span>
+        <strong>${escapeHtml(location.primaryBooks.join(", "))}</strong>
       </div>
-    </details>
+      <div class="detail-stat">
+        <span>Testamente</span>
+        <strong>${escapeHtml(testamentLabels.join(", "))}</strong>
+      </div>
+      <div class="detail-stat">
+        <span>Epoker</span>
+        <div class="detail-chip-row">${eraChips}</div>
+      </div>
+      <div class="detail-stat">
+        <span>Berättelsespår</span>
+        <strong>${relatedRouteList.length ? escapeHtml(relatedRouteList.join(", ")) : "Inget markerat spår"}</strong>
+      </div>
+    </div>
+    <section class="detail-section">
+      <h3>Geografisk notis</h3>
+      <p class="detail-note">${escapeHtml(location.geography)}</p>
+    </section>
+    <section class="detail-section">
+      <h3>Hänvisningar</h3>
+      <div class="reference-line detail-reference-list">${references}</div>
+    </section>
+    ${relatedRoutes ? `
+      <section class="detail-section">
+        <h3>Berättelsespår</h3>
+        <div class="detail-chip-row">${relatedRoutes}</div>
+      </section>
+    ` : ""}
+    <section class="detail-section">
+      <h3>Gestalter</h3>
+      <div class="detail-chip-row">${characters}</div>
+    </section>
   `;
 
   const currentIndex = visibleLocations.findIndex((item) => item.id === location.id);
@@ -602,10 +640,10 @@ function renderDetails(location, visibleLocations) {
   document.getElementById("detailFocusButton").addEventListener("click", () => focusOnLocations([location.id], true));
   document.getElementById("detailNextButton").addEventListener("click", () => {
     if (!nextLocation) return;
-      state.selectedId = nextLocation.id;
-      renderAll();
-      focusOnLocations([nextLocation.id], true);
-    });
+    state.selectedId = nextLocation.id;
+    renderAll();
+    focusOnLocations([nextLocation.id], true);
+  });
 }
 
 function renderPlaceList(visibleLocations) {
@@ -699,10 +737,122 @@ function labelMarkerOptions(location) {
 function shouldShowLabel(location) {
   if (!mapLoaded || !map) return true;
   if (location.id === state.selectedId) return true;
-  if (map.getZoom() >= 6.1) return true;
+  if (map.getZoom() >= LABEL_DETAIL_ZOOM) return true;
   const route = getActiveRoute();
   if (route && route.locations.includes(location.id)) return true;
   return anchorLabelIds.has(location.id);
+}
+
+function estimateLabelSize(location, selected) {
+  const books = location.primaryBooks.slice(0, 2).join(" • ");
+  const nameWidth = location.name.length * 8.5;
+  const booksWidth = selected ? books.length * 6.4 : 0;
+  return {
+    width: Math.min(184, Math.max(74, 38 + Math.max(nameWidth, booksWidth))),
+    height: selected ? 47 : 34
+  };
+}
+
+function getLabelScreenBox(location, labelConfig, selected) {
+  const point = map.project([location.lng, location.lat]);
+  const size = estimateLabelSize(location, selected);
+  const offset = labelConfig.offset || [0, 0];
+  const x = point.x + offset[0];
+  const y = point.y + offset[1];
+
+  const positions = {
+    bottom: { left: x - size.width / 2, top: y - size.height },
+    top: { left: x - size.width / 2, top: y },
+    left: { left: x, top: y - size.height / 2 },
+    right: { left: x - size.width, top: y - size.height / 2 },
+    center: { left: x - size.width / 2, top: y - size.height / 2 }
+  };
+  const position = positions[labelConfig.anchor] || positions.center;
+
+  return {
+    left: position.left,
+    top: position.top,
+    right: position.left + size.width,
+    bottom: position.top + size.height
+  };
+}
+
+function expandBox(box, amount) {
+  return {
+    left: box.left - amount,
+    top: box.top - amount,
+    right: box.right + amount,
+    bottom: box.bottom + amount
+  };
+}
+
+function boxesOverlap(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function isLabelBoxNearViewport(box) {
+  const container = map.getContainer();
+  const gutter = 18;
+  return box.right >= -gutter
+    && box.left <= container.clientWidth + gutter
+    && box.bottom >= -gutter
+    && box.top <= container.clientHeight + gutter;
+}
+
+function getLabelPriority(location, selected, route) {
+  if (selected) return 1000;
+
+  let priority = 0;
+  if (route) {
+    const routeIndex = route.locations.indexOf(location.id);
+    priority += routeIndex >= 0 ? 720 - routeIndex : -240;
+  }
+  if (anchorLabelIds.has(location.id)) priority += 360;
+  if (location.focusZoom && location.focusZoom <= 7) priority += 35;
+  priority += Math.round(Math.min(map.getZoom(), 10) * 10);
+  return priority;
+}
+
+function getLabelCollisionGap() {
+  const width = map.getContainer().clientWidth;
+  if (width < 560) return 13;
+  if (width < 920) return 10;
+  return 8;
+}
+
+function getVisibleLabelCandidates(visibleLocations, route, routeIds) {
+  const candidates = visibleLocations
+    .filter(shouldShowLabel)
+    .map((location) => {
+      const selected = location.id === state.selectedId;
+      const muted = Boolean(route) && !routeIds.has(location.id);
+      const labelConfig = labelMarkerOptions(location);
+      const box = getLabelScreenBox(location, labelConfig, selected);
+      return {
+        location,
+        meta: eraMeta[location.palette],
+        selected,
+        muted,
+        labelConfig,
+        box,
+        priority: getLabelPriority(location, selected, route)
+      };
+    })
+    .filter((candidate) => candidate.selected || isLabelBoxNearViewport(candidate.box))
+    .sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      return a.box.top - b.box.top;
+    });
+
+  const gap = getLabelCollisionGap();
+  const acceptedBoxes = [];
+  return candidates.filter((candidate) => {
+    const paddedBox = expandBox(candidate.box, gap);
+    const overlaps = acceptedBoxes.some((box) => boxesOverlap(paddedBox, box));
+    if (!candidate.selected && overlaps) return false;
+    acceptedBoxes.push(paddedBox);
+    return true;
+  });
 }
 
 function visibleRouteLocations(route, visibleLocations) {
@@ -908,18 +1058,17 @@ function renderMap(visibleLocations) {
       .setLngLat([location.lng, location.lat])
       .addTo(map);
     activePointMarkers.push(pointMarker);
+  });
 
-    if (shouldShowLabel(location)) {
-      const labelConfig = labelMarkerOptions(location);
-      const labelMarker = new maplibregl.Marker({
-        element: buildLabelMarker(location, meta, selected, muted),
-        anchor: labelConfig.anchor,
-        offset: labelConfig.offset
-      })
-        .setLngLat([location.lng, location.lat])
-        .addTo(map);
-      activeLabelMarkers.push(labelMarker);
-    }
+  getVisibleLabelCandidates(visibleLocations, route, routeIds).forEach((candidate) => {
+    const labelMarker = new maplibregl.Marker({
+      element: buildLabelMarker(candidate.location, candidate.meta, candidate.selected, candidate.muted),
+      anchor: candidate.labelConfig.anchor,
+      offset: candidate.labelConfig.offset
+    })
+      .setLngLat([candidate.location.lng, candidate.location.lat])
+      .addTo(map);
+    activeLabelMarkers.push(labelMarker);
   });
 }
 
@@ -1015,7 +1164,7 @@ function initializeMap() {
     if (mapLoaded) syncCompass();
   });
 
-  map.on("zoomend", () => {
+  map.on("moveend", () => {
     if (mapLoaded) renderMap(getVisibleLocations());
   });
 
@@ -1026,7 +1175,9 @@ function initializeMap() {
   });
 
   window.addEventListener("resize", () => {
-    if (map) map.resize();
+    if (!map) return;
+    map.resize();
+    if (mapLoaded) renderMap(getVisibleLocations());
   });
 }
 
@@ -1056,8 +1207,21 @@ placesToggle.addEventListener("click", () => {
 placesClose.addEventListener("click", closeDrawers);
 drawerScrim.addEventListener("click", closeDrawers);
 
+document.addEventListener("click", (event) => {
+  if (openDrawer !== "places") return;
+  if (event.target instanceof Node && placesPanel.contains(event.target)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  closeDrawers();
+}, true);
+
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && openDrawer) closeDrawers();
+  if (event.key !== "Escape") return;
+  if (openDrawer) {
+    closeDrawers();
+    return;
+  }
+  if (!routeMenu.hidden) closeRouteMenu(true);
 });
 
 zoomIn.addEventListener("click", () => {

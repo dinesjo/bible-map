@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preload" href="/fonts/Newsreader-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fonts/SourceSans3-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <title>Bibellandskap | Interaktiv bibelkarta</title>
 </head>
 <body>
@@ -90,7 +92,7 @@
             <strong id="visibleCount">32</strong>
           </button>
 
-          <aside class="overlay map-places-panel glass" id="placesPanel" aria-labelledby="placesTitle" aria-hidden="true">
+          <aside class="overlay map-places-panel glass" id="placesPanel" role="dialog" aria-modal="false" aria-labelledby="placesTitle" aria-hidden="true">
             <div class="drawer-head">
               <div>
                 <p class="section-label">Synliga platser</p>
@@ -116,7 +118,7 @@
         <section class="detail-card" id="detailCard" aria-live="polite"></section>
       </aside>
 
-      <aside class="drawer-panel filter-panel glass" id="filterPanel" role="dialog" aria-modal="true" aria-labelledby="filterTitle" aria-hidden="true">
+      <aside class="drawer-panel filter-panel glass" id="filterPanel" role="dialog" aria-modal="false" aria-labelledby="filterTitle" aria-hidden="true">
         <div class="drawer-head">
           <div>
             <p class="section-label">Lager</p>
