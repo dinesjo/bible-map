@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "validate:data": "node scripts/validate-atlas-data.mjs",
+    "check": "npm run validate:data && npm run build",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },

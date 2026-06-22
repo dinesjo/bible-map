@@ -12,6 +12,13 @@ npm run dev
 ## Production Build
 
 ```sh
+npm run check
+```
+
+Or run the steps separately:
+
+```sh
+npm run validate:data
 npm run build
 npm run preview
 ```
