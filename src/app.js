@@ -68,14 +68,15 @@ const aboutPanel = document.getElementById("aboutPanel");
 const aboutClose = document.getElementById("aboutClose");
 const aboutContent = document.getElementById("aboutContent");
 const drawerScrim = document.getElementById("drawerScrim");
+const inspectorPanel = document.getElementById("inspectorPanel");
 const sheetModalSiblings = [
   document.querySelector(".atlas-bar"),
   document.querySelector(".map-panel"),
-  document.getElementById("inspectorPanel")
+  inspectorPanel
 ].filter(Boolean);
 const placesModalSiblings = [
   document.querySelector(".atlas-bar"),
-  document.getElementById("inspectorPanel")
+  inspectorPanel
 ].filter(Boolean);
 
 let map = null;
@@ -96,6 +97,17 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function externalLinkMarkup(label, href, className = "") {
+  const classes = ["external-link", className].filter(Boolean).join(" ");
+  return `
+    <a class="${escapeHtml(classes)}" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">
+      <span>${escapeHtml(label)}</span>
+      <span class="external-link-icon" aria-hidden="true"></span>
+      <span class="sr-only">opens in a new tab</span>
+    </a>
+  `;
 }
 
 function bookSort(a, b) {
@@ -330,6 +342,21 @@ function focusOnLocations(ids, animated = true) {
   map.fitBounds(bounds, {
     padding: 56,
     duration: animated ? 760 : 0
+  });
+}
+
+function revealSelectedDetails() {
+  if (!placeById(state.selectedId) || !inspectorPanel) return;
+  if (openDrawer) closeDrawers();
+
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const targetTop = Math.max(0, inspectorPanel.getBoundingClientRect().top + window.scrollY - 8);
+  window.scrollTo({
+    top: targetTop,
+    behavior: prefersReducedMotion ? "auto" : "smooth"
+  });
+  requestAnimationFrame(() => {
+    inspectorPanel.focus({ preventScroll: true });
   });
 }
 
@@ -1023,14 +1050,16 @@ function renderDetails(place, visiblePlaces) {
     `).join("")
     : `<li><strong>No alternate identification in the imported record.</strong><span>OpenBible records this as a single best candidate.</span></li>`;
   const wikidataLink = place.links.wikidata
-    ? `<a class="detail-link" href="${escapeHtml(place.links.wikidata.url)}" target="_blank" rel="noreferrer">Wikidata ${escapeHtml(place.links.wikidata.id)}</a>`
+    ? externalLinkMarkup(`Wikidata ${place.links.wikidata.id}`, place.links.wikidata.url, "detail-link")
     : "";
   const openBibleModernLink = modern?.url
-    ? `<a class="detail-link" href="${escapeHtml(modern.url)}" target="_blank" rel="noreferrer">Modern candidate</a>`
+    ? externalLinkMarkup("Modern candidate", modern.url, "detail-link")
     : "";
   const activeTab = detailTabs.includes(state.detailTab) ? state.detailTab : "overview";
   const oldTestamentCount = referenceSummary.oldTestamentCount || 0;
   const newTestamentCount = referenceSummary.newTestamentCount || 0;
+  const compactReferences = window.matchMedia("(max-width: 760px)").matches;
+  const distributionOpen = referenceSummary.total && !compactReferences ? "open" : "";
   const currentIndex = visiblePlaces.findIndex((item) => item.id === place.id);
   const canNavigateVisible = currentIndex >= 0 && visiblePlaces.length > 1;
   const previousPlace = canNavigateVisible && currentIndex > 0 ? visiblePlaces[currentIndex - 1] : null;
@@ -1054,7 +1083,7 @@ function renderDetails(place, visiblePlaces) {
     </p>
     <div class="detail-actions">
       <button class="ghost-button is-active" id="detailFocusButton" type="button">Show on map</button>
-      <a class="ghost-button detail-action-link" href="${escapeHtml(place.links.openBible)}" target="_blank" rel="noreferrer">OpenBible record</a>
+      ${externalLinkMarkup("OpenBible record", place.links.openBible, "ghost-button detail-action-link")}
     </div>
     <nav class="visible-place-nav" aria-label="Browse visible places">
       <button
@@ -1127,23 +1156,11 @@ function renderDetails(place, visiblePlaces) {
       ${activeTab === "references" ? "" : "hidden"}
     >
       <div class="reference-dashboard">
-        <div class="reference-kpis">
-          <div class="detail-stat">
-            <span>Total</span>
-            <strong>${pluralize(referenceSummary.total, "reference")}</strong>
-          </div>
-          <div class="detail-stat">
-            <span>Books</span>
-            <strong>${pluralize(referenceSummary.bookCount, "book")}</strong>
-          </div>
-          <div class="detail-stat">
-            <span>Old Testament</span>
-            <strong>${pluralize(oldTestamentCount, "reference")}</strong>
-          </div>
-          <div class="detail-stat">
-            <span>New Testament</span>
-            <strong>${pluralize(newTestamentCount, "reference")}</strong>
-          </div>
+        <div class="reference-summary-strip" aria-label="Reference summary">
+          <span><strong>${formatNumber(referenceSummary.total)}</strong><small>refs</small></span>
+          <span><strong>${formatNumber(referenceSummary.bookCount)}</strong><small>books</small></span>
+          <span><strong>${formatNumber(oldTestamentCount)}</strong><small>OT</small></span>
+          <span><strong>${formatNumber(newTestamentCount)}</strong><small>NT</small></span>
         </div>
         <label class="reference-search" for="referenceSearchInput">
           <span>Search this place</span>
@@ -1155,14 +1172,17 @@ function renderDetails(place, visiblePlaces) {
           >
         </label>
       </div>
-      <section class="detail-section reference-book-distribution">
-        <h3>Book distribution</h3>
-        ${renderTopBooks(place, 80)}
-      </section>
       <section class="detail-section reference-results-section">
         <h3>Reference explorer</h3>
         <div class="reference-results" id="referenceResults">${renderReferenceResultContent(place)}</div>
       </section>
+      <details class="detail-section reference-book-distribution" ${distributionOpen}>
+        <summary>
+          <span>Book distribution</span>
+          <strong>${pluralize(referenceSummary.bookCount, "book")}</strong>
+        </summary>
+        ${renderTopBooks(place, 80)}
+      </details>
     </section>
     <section
       class="detail-tab-panel"
@@ -1210,7 +1230,7 @@ function renderDetails(place, visiblePlaces) {
       <section class="detail-section">
         <h3>Source links</h3>
         <div class="source-link-row">
-          <a class="detail-link" href="${escapeHtml(place.links.openBible)}" target="_blank" rel="noreferrer">Ancient place</a>
+          ${externalLinkMarkup("Ancient place", place.links.openBible, "detail-link")}
           ${openBibleModernLink}
           ${wikidataLink}
         </div>
@@ -1295,6 +1315,9 @@ function renderSummary(visiblePlaces) {
 
 function renderMiniCard(place) {
   if (!place) {
+    miniCard.disabled = true;
+    miniCard.classList.add("is-empty");
+    miniCard.setAttribute("aria-label", "No selected place");
     miniCard.innerHTML = `
       <strong>No selected place</strong>
       <span>Adjust filters or select a visible map point.</span>
@@ -1309,13 +1332,22 @@ function renderMiniCard(place) {
   const modernName = place.bestIdentification?.modern?.name || place.bestIdentification?.name || "modern candidate";
   const summary = referenceSummaryForPlace(place);
 
+  miniCard.disabled = false;
+  miniCard.classList.remove("is-empty");
+  miniCard.setAttribute("aria-label", `View details for ${place.name}`);
   miniCard.innerHTML = `
-    <strong>${escapeHtml(place.name)}</strong>
-    <span class="mini-card-meta">
-      ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence · ${pluralize(summary.bookCount, "book")} · ${pluralize(summary.total, "ref")}
+    <span class="mini-card-copy">
+      <strong>${escapeHtml(place.name)}</strong>
+      <span class="mini-card-meta">
+        ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence · ${pluralize(summary.bookCount, "book")} · ${pluralize(summary.total, "ref")}
+      </span>
+      <span>${escapeHtml(modernName)}</span>
+      ${routeNote}
     </span>
-    <span>${escapeHtml(modernName)}</span>
-    ${routeNote}
+    <span class="mini-card-affordance" aria-hidden="true">
+      <span>Details</span>
+      <span class="mini-card-arrow">↓</span>
+    </span>
   `;
 }
 
@@ -1329,7 +1361,7 @@ function renderAbout() {
     <section class="about-section">
       <h3>Data snapshot</h3>
       <p>
-        This app uses a pinned snapshot of <a href="${escapeHtml(sourceMeta.sourceUrl)}" target="_blank" rel="noreferrer">OpenBible.info Bible Geocoding Data</a>.
+        This app uses a pinned snapshot of ${externalLinkMarkup("OpenBible.info Bible Geocoding Data", sourceMeta.sourceUrl)}.
         It is not fetched live in the browser or in CI.
       </p>
       <div class="detail-meta-grid">
@@ -1343,7 +1375,7 @@ function renderAbout() {
       <h3>License and attribution</h3>
       <p>
         Geodata is adapted from OpenBible.info Bible Geocoding Data under
-        <a href="${escapeHtml(sourceMeta.licenseUrl)}" target="_blank" rel="noreferrer">${escapeHtml(sourceMeta.license)}</a>.
+        ${externalLinkMarkup(sourceMeta.license, sourceMeta.licenseUrl)}.
         Imported records are reshaped for this application; embedded markup is stripped and images/OSM-derived geometry are not included in this version.
       </p>
     </section>
@@ -1597,6 +1629,9 @@ function renderMap(visiblePlaces) {
 
 function setMapFallback(message = "MapLibre or the vector basemap could not load.") {
   mapFallback.classList.add("is-visible");
+  miniCard.disabled = true;
+  miniCard.classList.add("is-empty");
+  miniCard.setAttribute("aria-label", "Map layer unavailable");
   miniCard.innerHTML = `
     <strong>Map layer unavailable</strong>
     <span>${escapeHtml(message)} Open the app with network access for the basemap.</span>
@@ -1633,7 +1668,7 @@ function initializeMap() {
     cooperativeGestures: true,
     attributionControl: {
       compact: true,
-      customAttribution: `<a href="${sourceMeta.sourceUrl}" target="_blank" rel="noreferrer">OpenBible.info Bible Geocoding Data</a> ${sourceMeta.license}`
+      customAttribution: `${externalLinkMarkup("OpenBible.info Bible Geocoding Data", sourceMeta.sourceUrl, "map-attribution-link")} ${sourceMeta.license}`
     }
   });
 
@@ -1678,6 +1713,8 @@ function renderAll() {
 }
 
 function bindGlobalEvents() {
+  miniCard.addEventListener("click", revealSelectedDetails);
+
   filterToggle.addEventListener("click", () => {
     setDrawer("filters", openDrawer !== "filters");
   });
@@ -1756,6 +1793,9 @@ function renderLoading() {
     <h2 class="detail-title">Loading places</h2>
     <div class="empty-state">Loading the pinned OpenBible data snapshot.</div>
   `;
+  miniCard.disabled = true;
+  miniCard.classList.add("is-empty");
+  miniCard.setAttribute("aria-label", "Loading data");
   miniCard.innerHTML = `
     <strong>Loading data</strong>
     <span>The map will render after the source-backed snapshot is ready.</span>

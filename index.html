@@ -83,10 +83,10 @@
             <small>North</small>
           </button>
 
-          <div class="overlay mini-card" id="miniCard">
+          <button class="overlay mini-card" id="miniCard" type="button" aria-controls="inspectorPanel" aria-label="Selected place details" disabled>
             <strong>Selected place</strong>
             <span>Select a place on the map.</span>
-          </div>
+          </button>
 
           <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Show place list" aria-expanded="false" aria-controls="placesPanel">
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -121,7 +121,7 @@
         </div>
       </section>
 
-      <aside class="inspector-panel glass" id="inspectorPanel">
+      <aside class="inspector-panel glass" id="inspectorPanel" tabindex="-1">
         <section class="detail-card" id="detailCard" aria-live="polite"></section>
       </aside>
 
