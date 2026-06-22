@@ -36,7 +36,7 @@ The app is useful now: it has 32 curated places, 12 story routes, search, filter
 
 ## Known Product Gaps
 
-- No favicon or social preview metadata yet.
+- No social preview metadata yet.
 - No automated browser, accessibility, or visual regression tests.
 - No analytics/error monitoring, privacy text, or launch instrumentation.
 - The basemap depends on the public OpenFreeMap style and tile availability.
@@ -44,4 +44,4 @@ The app is useful now: it has 32 curated places, 12 story routes, search, filter
 
 ## Launch Bar
 
-Before advertising broadly, verify the live URL on desktop and mobile, add brand/favicon/social metadata, decide whether OpenFreeMap is acceptable for expected traffic, add any required privacy text if analytics is introduced, and keep `npm run check` green.
+Before advertising broadly, verify the live URL on desktop and mobile, add brand/social metadata, decide whether OpenFreeMap is acceptable for expected traffic, add any required privacy text if analytics is introduced, and keep `npm run check` green.
