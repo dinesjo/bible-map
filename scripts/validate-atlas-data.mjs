@@ -43,6 +43,11 @@ function sameNumber(a, b) {
   return Math.abs(a - b) < 0.000001;
 }
 
+function bookIndex(bookId) {
+  const index = bookOrder.indexOf(bookId);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
 function validateStringArray(owner, field, values, { allowEmpty = false } = {}) {
   if (!Array.isArray(values) || (!allowEmpty && values.length === 0)) {
     addError(`${owner}: ${field} must be ${allowEmpty ? "an array" : "a non-empty array"}`);
@@ -56,6 +61,113 @@ function validateStringArray(owner, field, values, { allowEmpty = false } = {}) 
   });
 
   return values;
+}
+
+function validateReferenceDetails(owner, place) {
+  if (!Array.isArray(place.referenceDetails)) {
+    addError(`${owner}: referenceDetails must be an array`);
+    return [];
+  }
+
+  if (place.referenceDetails.length !== place.verseCount) {
+    addError(`${owner}: referenceDetails length must equal verseCount`);
+  }
+
+  place.referenceDetails.forEach((reference, index) => {
+    const referenceOwner = `${owner}: referenceDetails[${index}]`;
+    if (!reference || typeof reference !== "object") {
+      addError(`${referenceOwner} must be an object`);
+      return;
+    }
+
+    if (!isNonEmptyString(reference.bookId)) addError(`${referenceOwner}.bookId is required`);
+    if (!bookIds.has(reference.bookId)) addError(`${referenceOwner}.bookId "${reference.bookId}" is unknown`);
+    if (!isNonEmptyString(reference.bookLabel)) addError(`${referenceOwner}.bookLabel is required`);
+    if (!testamentIds.has(reference.testament)) addError(`${referenceOwner}.testament is invalid`);
+    if (!Number.isInteger(reference.chapter) || reference.chapter < 1) addError(`${referenceOwner}.chapter must be a positive integer`);
+    if (!Number.isInteger(reference.verse) || reference.verse < 1) addError(`${referenceOwner}.verse must be a positive integer`);
+    if (!isNonEmptyString(reference.readable)) addError(`${referenceOwner}.readable is required`);
+    if (!isNonEmptyString(reference.osis)) addError(`${referenceOwner}.osis is required`);
+    if (!Number.isFinite(reference.sort)) addError(`${referenceOwner}.sort must be finite`);
+
+    if (place.references?.[index] !== reference.readable) {
+      addError(`${referenceOwner}.readable must match references[${index}]`);
+    }
+  });
+
+  return place.referenceDetails;
+}
+
+function summarizeReferences(referenceDetails) {
+  const bookCounts = new Map();
+  let oldTestamentCount = 0;
+  let newTestamentCount = 0;
+
+  referenceDetails.forEach((reference) => {
+    if (reference.testament === "OT") oldTestamentCount += 1;
+    if (reference.testament === "NT") newTestamentCount += 1;
+
+    const existing = bookCounts.get(reference.bookId) || {
+      bookId: reference.bookId,
+      bookLabel: reference.bookLabel,
+      testament: reference.testament,
+      count: 0
+    };
+    existing.count += 1;
+    bookCounts.set(reference.bookId, existing);
+  });
+
+  return {
+    total: referenceDetails.length,
+    bookCount: bookCounts.size,
+    oldTestamentCount,
+    newTestamentCount,
+    topBooks: [...bookCounts.values()]
+      .sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return bookIndex(a.bookId) - bookIndex(b.bookId);
+      })
+      .slice(0, 5)
+  };
+}
+
+function validateReferenceSummary(owner, summary, expected) {
+  if (!summary || typeof summary !== "object") {
+    addError(`${owner}: referenceSummary is required`);
+    return;
+  }
+
+  ["total", "bookCount", "oldTestamentCount", "newTestamentCount"].forEach((field) => {
+    if (!Number.isInteger(summary[field]) || summary[field] < 0) {
+      addError(`${owner}: referenceSummary.${field} must be a non-negative integer`);
+      return;
+    }
+    if (summary[field] !== expected[field]) {
+      addError(`${owner}: referenceSummary.${field} expected ${expected[field]}, received ${summary[field]}`);
+    }
+  });
+
+  if (!Array.isArray(summary.topBooks)) {
+    addError(`${owner}: referenceSummary.topBooks must be an array`);
+    return;
+  }
+
+  if (summary.topBooks.length !== expected.topBooks.length) {
+    addError(`${owner}: referenceSummary.topBooks length expected ${expected.topBooks.length}, received ${summary.topBooks.length}`);
+  }
+
+  summary.topBooks.forEach((book, index) => {
+    const expectedBook = expected.topBooks[index];
+    const bookOwner = `${owner}: referenceSummary.topBooks[${index}]`;
+    if (!book || typeof book !== "object") {
+      addError(`${bookOwner} must be an object`);
+      return;
+    }
+    if (book.bookId !== expectedBook?.bookId) addError(`${bookOwner}.bookId expected ${expectedBook?.bookId}, received ${book.bookId}`);
+    if (book.bookLabel !== expectedBook?.bookLabel) addError(`${bookOwner}.bookLabel expected ${expectedBook?.bookLabel}, received ${book.bookLabel}`);
+    if (book.testament !== expectedBook?.testament) addError(`${bookOwner}.testament expected ${expectedBook?.testament}, received ${book.testament}`);
+    if (book.count !== expectedBook?.count) addError(`${bookOwner}.count expected ${expectedBook?.count}, received ${book.count}`);
+  });
 }
 
 function validateBounds(bounds) {
@@ -152,6 +264,9 @@ function validatePlace(place, index, ids) {
   } else if (place.references.length !== place.verseCount) {
     addError(`${owner}: references length must equal verseCount`);
   }
+
+  const referenceDetails = validateReferenceDetails(owner, place);
+  validateReferenceSummary(owner, place.referenceSummary, summarizeReferences(referenceDetails));
 
   if (!place.bestIdentification || typeof place.bestIdentification !== "object") {
     addError(`${owner}: bestIdentification is required`);

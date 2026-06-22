@@ -17,7 +17,10 @@ const state = {
   type: "all",
   route: null,
   search: "",
-  selectedId: DEFAULT_SELECTED_PLACE_ID
+  selectedId: DEFAULT_SELECTED_PLACE_ID,
+  detailTab: "overview",
+  referenceSearch: "",
+  referenceLimit: 160
 };
 
 const SOURCE_ID = "openbible-places";
@@ -27,6 +30,8 @@ const LABEL_LAYER_ID = "openbible-place-labels";
 const ROUTE_LINE_SOURCE_ID = "story-route-line";
 const ROUTE_STOP_SOURCE_ID = "story-route-stops";
 const confidenceOrder = ["high", "medium", "low", "unknown"];
+const detailTabs = ["overview", "references", "evidence"];
+const REFERENCE_PAGE_SIZE = 160;
 
 const routePicker = document.getElementById("routePicker");
 const routePickerButton = document.getElementById("routePickerButton");
@@ -82,6 +87,7 @@ let sourceMeta = null;
 let allPlaces = [];
 let placesById = new Map();
 let visiblePlacesCache = [];
+let detailPlaceId = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -130,6 +136,13 @@ function createSearchText(place) {
     place.testaments.join(" "),
     place.books.join(" "),
     place.references.join(" "),
+    (place.referenceDetails || []).map((reference) => [
+      reference.readable,
+      reference.osis,
+      reference.bookId,
+      reference.bookLabel,
+      reference.testament
+    ].filter(Boolean).join(" ")).join(" "),
     place.bestIdentification?.name,
     place.bestIdentification?.description,
     place.bestIdentification?.modern?.name,
@@ -668,17 +681,317 @@ function renderActiveFilters(visiblePlaces) {
   ].filter(Boolean).join(" ");
 }
 
-function formatReferences(place, limit = 36) {
-  if (!place.references.length) return `<span class="empty-inline">No direct verse references in the imported record.</span>`;
-  const visible = place.references.slice(0, limit).map((reference) => `<span class="ref-chip">${escapeHtml(reference)}</span>`);
-  const hidden = place.references.length - visible.length;
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString("en-US");
+}
+
+function pluralize(count, singular, plural = `${singular}s`) {
+  return `${formatNumber(count)} ${count === 1 ? singular : plural}`;
+}
+
+function ensureDetailState(place) {
+  const nextId = place?.id || null;
+  if (detailPlaceId === nextId) return;
+  detailPlaceId = nextId;
+  state.detailTab = "overview";
+  state.referenceSearch = "";
+  state.referenceLimit = REFERENCE_PAGE_SIZE;
+}
+
+function referenceDetailsForPlace(place) {
+  if (Array.isArray(place?.referenceDetails) && place.referenceDetails.length) {
+    return place.referenceDetails;
+  }
+
+  return (place?.references || []).map((readable, index) => {
+    const bookId = place.books.find((book) => readable.startsWith(book)) || place.books[0] || "Unknown";
+    return {
+      bookId,
+      bookLabel: bookId,
+      testament: place.testaments[0] || "OT",
+      chapter: null,
+      verse: null,
+      readable,
+      osis: "",
+      sort: index
+    };
+  });
+}
+
+function referenceBookCounts(place) {
+  const counts = new Map();
+  referenceDetailsForPlace(place).forEach((reference) => {
+    const key = reference.bookId || "Unknown";
+    const existing = counts.get(key) || {
+      bookId: key,
+      bookLabel: reference.bookLabel || key,
+      testament: reference.testament || null,
+      count: 0
+    };
+    existing.count += 1;
+    counts.set(key, existing);
+  });
+
+  return [...counts.values()].sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return bookSort(a.bookId, b.bookId);
+  });
+}
+
+function referenceSummaryForPlace(place) {
+  const details = referenceDetailsForPlace(place);
+  if (place?.referenceSummary && place.referenceSummary.total === details.length) {
+    return place.referenceSummary;
+  }
+
+  const bookCounts = referenceBookCounts(place);
+  return {
+    total: details.length,
+    bookCount: bookCounts.length,
+    oldTestamentCount: details.filter((reference) => reference.testament === "OT").length,
+    newTestamentCount: details.filter((reference) => reference.testament === "NT").length,
+    topBooks: bookCounts.slice(0, 5)
+  };
+}
+
+function referenceMetaLine(place) {
+  const summary = referenceSummaryForPlace(place);
+  if (!summary.total) return "No direct references";
+  return `${pluralize(summary.bookCount, "book")} / ${pluralize(summary.total, "reference")}`;
+}
+
+function renderReferenceChip(reference) {
+  const readable = typeof reference === "string" ? reference : reference.readable;
+  return `<span class="ref-chip">${escapeHtml(readable)}</span>`;
+}
+
+function renderTopBooks(place, limit = 5) {
+  const books = referenceBookCounts(place).slice(0, limit);
+  if (!books.length) {
+    return `<div class="empty-inline">No book distribution is available for this record.</div>`;
+  }
+
+  const max = Math.max(...books.map((book) => book.count), 1);
+  return `
+    <div class="book-bars">
+      ${books.map((book) => {
+        const width = Math.max(9, Math.round((book.count / max) * 100));
+        return `
+          <div class="book-bar" style="--bar-width:${width}%;">
+            <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
+            <strong>${formatNumber(book.count)}</strong>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderReferencePreview(place) {
+  const references = referenceDetailsForPlace(place);
+  const summary = referenceSummaryForPlace(place);
+  if (!summary.total) return `<span class="empty-inline">No direct verse references in the imported record.</span>`;
+
+  if (summary.total <= 12) {
+    return `<div class="reference-line detail-reference-list">${references.map(renderReferenceChip).join("")}</div>`;
+  }
+
+  if (summary.total > 60) {
+    return `
+      <div class="reference-preview">
+        <div class="reference-callout">
+          <div>
+            <strong>${pluralize(summary.total, "reference")} across ${pluralize(summary.bookCount, "book")}</strong>
+            <span>Open the reference explorer for the full list grouped by Testament, book, and chapter.</span>
+          </div>
+          <button class="ghost-button is-active" type="button" data-detail-tab="references" aria-controls="detail-panel-references">
+            Open references
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  const previewLimit = 18;
+  const preview = references.slice(0, previewLimit).map(renderReferenceChip).join("");
+  const hidden = summary.total - previewLimit;
+
+  return `
+    <div class="reference-preview">
+      <div class="reference-line detail-reference-list">
+        ${preview}
+        <span class="ref-more">+${formatNumber(hidden)} more</span>
+      </div>
+      <div class="reference-callout">
+        <div>
+          <strong>${pluralize(summary.total, "reference")} across ${pluralize(summary.bookCount, "book")}</strong>
+          <span>Explore the full list grouped by Testament, book, and chapter.</span>
+        </div>
+        <button class="ghost-button is-active" type="button" data-detail-tab="references" aria-controls="detail-panel-references">
+          Show all ${formatNumber(summary.total)} references
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function renderDetailTabs(activeTab) {
+  const labels = {
+    overview: "Overview",
+    references: "References",
+    evidence: "Evidence"
+  };
+
+  return `
+    <div class="detail-tabs" role="tablist" aria-label="Place details">
+      ${detailTabs.map((tab) => `
+        <button
+          class="detail-tab${activeTab === tab ? " is-active" : ""}"
+          id="detail-tab-${tab}"
+          type="button"
+          role="tab"
+          aria-selected="${activeTab === tab}"
+          aria-controls="detail-panel-${tab}"
+          data-detail-tab="${tab}"
+        >
+          ${escapeHtml(labels[tab])}
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function referenceMatchesSearch(reference, search) {
+  if (!search) return true;
   return [
-    ...visible,
-    hidden > 0 ? `<span class="ref-more">+${hidden.toLocaleString("en-US")} more</span>` : ""
-  ].join("");
+    reference.readable,
+    reference.osis,
+    reference.bookId,
+    reference.bookLabel,
+    reference.testament,
+    reference.chapter,
+    reference.verse
+  ].filter((value) => value !== null && value !== undefined)
+    .join(" ")
+    .toLowerCase()
+    .includes(search);
+}
+
+function groupReferenceResults(references) {
+  const groups = new Map();
+  references.forEach((reference) => {
+    const testament = reference.testament || "unknown";
+    const testamentGroup = groups.get(testament) || {
+      testament,
+      count: 0,
+      books: new Map()
+    };
+    testamentGroup.count += 1;
+
+    const bookKey = reference.bookId || "Unknown";
+    const bookGroup = testamentGroup.books.get(bookKey) || {
+      bookId: bookKey,
+      bookLabel: reference.bookLabel || bookKey,
+      count: 0,
+      chapters: new Map()
+    };
+    bookGroup.count += 1;
+
+    const chapterKey = Number.isInteger(reference.chapter) ? String(reference.chapter) : "other";
+    const chapterGroup = bookGroup.chapters.get(chapterKey) || {
+      chapter: reference.chapter,
+      references: []
+    };
+    chapterGroup.references.push(reference);
+
+    bookGroup.chapters.set(chapterKey, chapterGroup);
+    testamentGroup.books.set(bookKey, bookGroup);
+    groups.set(testament, testamentGroup);
+  });
+
+  return ["OT", "NT", "unknown"]
+    .filter((key) => groups.has(key))
+    .map((key) => {
+      const group = groups.get(key);
+      return {
+        ...group,
+        books: [...group.books.values()].sort((a, b) => bookSort(a.bookId, b.bookId))
+      };
+    });
+}
+
+function renderReferenceResultContent(place) {
+  const search = state.referenceSearch.trim().toLowerCase();
+  const allReferences = referenceDetailsForPlace(place).slice().sort((a, b) => a.sort - b.sort);
+  const filtered = allReferences.filter((reference) => referenceMatchesSearch(reference, search));
+  const visible = filtered.slice(0, state.referenceLimit);
+  const hidden = filtered.length - visible.length;
+
+  if (!filtered.length) {
+    return `
+      <p class="reference-result-count">No references match this search.</p>
+      <div class="empty-state">Try a book name, abbreviation, chapter, or reference such as “Genesis 12”.</div>
+    `;
+  }
+
+  const groups = groupReferenceResults(visible);
+  return `
+    <p class="reference-result-count">
+      Showing ${formatNumber(visible.length)} of ${formatNumber(filtered.length)} matching references.
+    </p>
+    ${groups.map((testamentGroup) => `
+      <section class="reference-testament-group">
+        <h3>
+          ${escapeHtml(testamentMeta[testamentGroup.testament]?.label || "Other references")}
+          <span>${formatNumber(testamentGroup.count)}</span>
+        </h3>
+        ${testamentGroup.books.map((book, bookIndex) => `
+          <details class="reference-book" ${search || bookIndex < 2 ? "open" : ""}>
+            <summary>
+              <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
+              <strong>${pluralize(book.count, "ref")}</strong>
+            </summary>
+            <div class="reference-chapter-stack">
+              ${[...book.chapters.values()].map((chapter) => `
+                <div class="reference-chapter">
+                  <span class="reference-chapter-label">
+                    ${Number.isInteger(chapter.chapter) ? `${escapeHtml(book.bookLabel || book.bookId)} ${chapter.chapter}` : "Other references"}
+                  </span>
+                  <div class="reference-chip-grid">
+                    ${chapter.references.map(renderReferenceChip).join("")}
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+          </details>
+        `).join("")}
+      </section>
+    `).join("")}
+    ${hidden > 0 ? `
+      <button class="ghost-button reference-more-button" id="referenceShowMoreButton" type="button" aria-controls="referenceResults">
+        Show ${formatNumber(Math.min(REFERENCE_PAGE_SIZE, hidden))} more
+      </button>
+    ` : ""}
+  `;
+}
+
+function renderReferenceResults(place) {
+  const results = document.getElementById("referenceResults");
+  if (!results) return;
+  results.innerHTML = renderReferenceResultContent(place);
+
+  const showMore = document.getElementById("referenceShowMoreButton");
+  if (showMore) {
+    showMore.addEventListener("click", () => {
+      state.referenceLimit += REFERENCE_PAGE_SIZE;
+      renderReferenceResults(place);
+    });
+  }
 }
 
 function renderDetails(place, visiblePlaces) {
+  ensureDetailState(place);
+
   if (!place) {
     detailCard.innerHTML = `
       <p class="section-label">Selected place</p>
@@ -699,8 +1012,8 @@ function renderDetails(place, visiblePlaces) {
   const modern = place.bestIdentification?.modern;
   const modernName = modern?.name || place.bestIdentification?.name || "No named modern candidate";
   const candidateText = place.bestIdentification?.description || modernName;
-  const books = place.books.length ? place.books.join(", ") : "No book metadata";
   const testaments = place.testaments.map((testament) => testamentMeta[testament]?.label || testament).join(", ") || "No testament metadata";
+  const referenceSummary = referenceSummaryForPlace(place);
   const alternatives = place.alternatives.length
     ? place.alternatives.map((alternative) => `
       <li>
@@ -715,6 +1028,16 @@ function renderDetails(place, visiblePlaces) {
   const openBibleModernLink = modern?.url
     ? `<a class="detail-link" href="${escapeHtml(modern.url)}" target="_blank" rel="noreferrer">Modern candidate</a>`
     : "";
+  const activeTab = detailTabs.includes(state.detailTab) ? state.detailTab : "overview";
+  const oldTestamentCount = referenceSummary.oldTestamentCount || 0;
+  const newTestamentCount = referenceSummary.newTestamentCount || 0;
+  const currentIndex = visiblePlaces.findIndex((item) => item.id === place.id);
+  const canNavigateVisible = currentIndex >= 0 && visiblePlaces.length > 1;
+  const previousPlace = canNavigateVisible && currentIndex > 0 ? visiblePlaces[currentIndex - 1] : null;
+  const nextPlace = canNavigateVisible && currentIndex < visiblePlaces.length - 1 ? visiblePlaces[currentIndex + 1] : null;
+  const positionText = currentIndex >= 0
+    ? `${formatNumber(currentIndex + 1)} of ${formatNumber(visiblePlaces.length)} visible`
+    : `${formatNumber(visiblePlaces.length)} visible`;
 
   detailCard.innerHTML = `
     <p class="section-label">Selected place</p>
@@ -731,78 +1054,207 @@ function renderDetails(place, visiblePlaces) {
     </p>
     <div class="detail-actions">
       <button class="ghost-button is-active" id="detailFocusButton" type="button">Show on map</button>
-      <button class="ghost-button" id="detailNextButton" type="button">Next visible place</button>
       <a class="ghost-button detail-action-link" href="${escapeHtml(place.links.openBible)}" target="_blank" rel="noreferrer">OpenBible record</a>
     </div>
-    <div class="detail-meta-grid">
-      <div class="detail-stat">
-        <span>Confidence</span>
-        <strong><span class="confidence-pill confidence-${escapeHtml(place.confidence)}">${escapeHtml(confidenceLabel(place.confidence))}</span></strong>
+    <nav class="visible-place-nav" aria-label="Browse visible places">
+      <button
+        class="visible-nav-button"
+        id="detailPreviousButton"
+        type="button"
+        aria-label="Previous visible place"
+        ${previousPlace ? "" : "disabled"}
+      >
+        <span aria-hidden="true">←</span>
+        <strong>Previous</strong>
+      </button>
+      <span class="visible-place-position">${escapeHtml(positionText)}</span>
+      <button
+        class="visible-nav-button"
+        id="detailNextButton"
+        type="button"
+        aria-label="Next visible place"
+        ${nextPlace ? "" : "disabled"}
+      >
+        <strong>Next</strong>
+        <span aria-hidden="true">→</span>
+      </button>
+    </nav>
+    ${renderDetailTabs(activeTab)}
+    <section
+      class="detail-tab-panel"
+      id="detail-panel-overview"
+      role="tabpanel"
+      aria-labelledby="detail-tab-overview"
+      ${activeTab === "overview" ? "" : "hidden"}
+    >
+      <div class="detail-meta-grid">
+        <div class="detail-stat">
+          <span>Confidence</span>
+          <strong><span class="confidence-pill confidence-${escapeHtml(place.confidence)}">${escapeHtml(confidenceLabel(place.confidence))}</span></strong>
+        </div>
+        <div class="detail-stat">
+          <span>Modern candidate</span>
+          <strong>${escapeHtml(modernName)}</strong>
+        </div>
+        <div class="detail-stat">
+          <span>References</span>
+          <strong>${escapeHtml(referenceMetaLine(place))}</strong>
+        </div>
+        <div class="detail-stat">
+          <span>Testament</span>
+          <strong>${escapeHtml(testaments)}</strong>
+        </div>
       </div>
-      <div class="detail-stat">
-        <span>Modern candidate</span>
-        <strong>${escapeHtml(modernName)}</strong>
-      </div>
-      <div class="detail-stat">
-        <span>References</span>
-        <strong>${place.verseCount.toLocaleString("en-US")} verse${place.verseCount === 1 ? "" : "s"}</strong>
-      </div>
-      <div class="detail-stat">
-        <span>Sources / votes</span>
-        <strong>${place.sourceCount.toLocaleString("en-US")} sources / ${place.voteCount ?? "n/a"} votes</strong>
-      </div>
-      <div class="detail-stat">
-        <span>Books</span>
-        <strong>${escapeHtml(books)}</strong>
-      </div>
-      <div class="detail-stat">
-        <span>Testament</span>
-        <strong>${escapeHtml(testaments)}</strong>
-      </div>
-    </div>
-    <section class="detail-section">
-      <h3>Identification</h3>
-      <p class="detail-note">${escapeHtml(candidateText)}</p>
-      <div class="detail-chip-row">
-        ${place.types.map((type) => `<span class="small-chip">${escapeHtml(typeLabel(type))}</span>`).join("")}
-        <span class="small-chip">${escapeHtml(place.lng)}, ${escapeHtml(place.lat)}</span>
-      </div>
-    </section>
-    <section class="detail-section">
-      <h3>Alternative identifications</h3>
-      <ul class="alternative-list">${alternatives}</ul>
-    </section>
-    <section class="detail-section">
-      <h3>References</h3>
-      <div class="reference-line detail-reference-list">${formatReferences(place)}</div>
-    </section>
-    ${relatedRoutes.length ? `
       <section class="detail-section">
-        <h3>Editorial routes</h3>
-        <div class="detail-chip-row">${relatedRoutes.map((item) => `<span class="small-chip">${escapeHtml(item.title)}</span>`).join("")}</div>
+        <h3>Top books</h3>
+        ${renderTopBooks(place, 5)}
+        ${referenceSummary.total ? `
+          <button class="ghost-button compact-action" type="button" data-detail-tab="references" aria-controls="detail-panel-references">
+            View all references
+          </button>
+        ` : ""}
       </section>
-    ` : ""}
-    <section class="detail-section">
-      <h3>Source links</h3>
-      <div class="source-link-row">
-        <a class="detail-link" href="${escapeHtml(place.links.openBible)}" target="_blank" rel="noreferrer">Ancient place</a>
-        ${openBibleModernLink}
-        ${wikidataLink}
+      <section class="detail-section">
+        <h3>References</h3>
+        ${renderReferencePreview(place)}
+      </section>
+    </section>
+    <section
+      class="detail-tab-panel"
+      id="detail-panel-references"
+      role="tabpanel"
+      aria-labelledby="detail-tab-references"
+      ${activeTab === "references" ? "" : "hidden"}
+    >
+      <div class="reference-dashboard">
+        <div class="reference-kpis">
+          <div class="detail-stat">
+            <span>Total</span>
+            <strong>${pluralize(referenceSummary.total, "reference")}</strong>
+          </div>
+          <div class="detail-stat">
+            <span>Books</span>
+            <strong>${pluralize(referenceSummary.bookCount, "book")}</strong>
+          </div>
+          <div class="detail-stat">
+            <span>Old Testament</span>
+            <strong>${pluralize(oldTestamentCount, "reference")}</strong>
+          </div>
+          <div class="detail-stat">
+            <span>New Testament</span>
+            <strong>${pluralize(newTestamentCount, "reference")}</strong>
+          </div>
+        </div>
+        <label class="reference-search" for="referenceSearchInput">
+          <span>Search this place</span>
+          <input
+            id="referenceSearchInput"
+            type="search"
+            value="${escapeHtml(state.referenceSearch)}"
+            placeholder="Book, chapter, or reference"
+          >
+        </label>
       </div>
-      <p class="detail-source-note">Imported from OpenBible.info Bible Geocoding Data, ${escapeHtml(sourceMeta.license)}. Markup has been stripped and the record has been reshaped for this app.</p>
+      <section class="detail-section reference-book-distribution">
+        <h3>Book distribution</h3>
+        ${renderTopBooks(place, 80)}
+      </section>
+      <section class="detail-section reference-results-section">
+        <h3>Reference explorer</h3>
+        <div class="reference-results" id="referenceResults">${renderReferenceResultContent(place)}</div>
+      </section>
+    </section>
+    <section
+      class="detail-tab-panel"
+      id="detail-panel-evidence"
+      role="tabpanel"
+      aria-labelledby="detail-tab-evidence"
+      ${activeTab === "evidence" ? "" : "hidden"}
+    >
+      <div class="detail-meta-grid">
+        <div class="detail-stat">
+          <span>Sources / votes</span>
+          <strong>${place.sourceCount.toLocaleString("en-US")} sources / ${place.voteCount ?? "n/a"} votes</strong>
+        </div>
+        <div class="detail-stat">
+          <span>Vote total</span>
+          <strong>${place.voteTotal ?? "n/a"}</strong>
+        </div>
+        <div class="detail-stat">
+          <span>Coordinates</span>
+          <strong>${escapeHtml(place.lng)}, ${escapeHtml(place.lat)}</strong>
+        </div>
+        <div class="detail-stat">
+          <span>Type</span>
+          <strong>${escapeHtml(place.types.map(typeLabel).join(", ") || "Place")}</strong>
+        </div>
+      </div>
+      <section class="detail-section">
+        <h3>Identification</h3>
+        <p class="detail-note">${escapeHtml(candidateText)}</p>
+        <div class="detail-chip-row">
+          ${place.types.map((type) => `<span class="small-chip">${escapeHtml(typeLabel(type))}</span>`).join("")}
+          ${modern?.precision ? `<span class="small-chip">${escapeHtml(modern.precision)}</span>` : ""}
+        </div>
+      </section>
+      <section class="detail-section">
+        <h3>Alternative identifications</h3>
+        <ul class="alternative-list">${alternatives}</ul>
+      </section>
+      ${relatedRoutes.length ? `
+        <section class="detail-section">
+          <h3>Editorial routes</h3>
+          <div class="detail-chip-row">${relatedRoutes.map((item) => `<span class="small-chip">${escapeHtml(item.title)}</span>`).join("")}</div>
+        </section>
+      ` : ""}
+      <section class="detail-section">
+        <h3>Source links</h3>
+        <div class="source-link-row">
+          <a class="detail-link" href="${escapeHtml(place.links.openBible)}" target="_blank" rel="noreferrer">Ancient place</a>
+          ${openBibleModernLink}
+          ${wikidataLink}
+        </div>
+        <p class="detail-source-note">Imported from OpenBible.info Bible Geocoding Data, ${escapeHtml(sourceMeta.license)}. Markup has been stripped and the record has been reshaped for this app.</p>
+      </section>
     </section>
   `;
 
-  const currentIndex = visiblePlaces.findIndex((item) => item.id === place.id);
-  const nextPlace = currentIndex >= 0 ? visiblePlaces[(currentIndex + 1) % visiblePlaces.length] : null;
-
   document.getElementById("detailFocusButton").addEventListener("click", () => focusOnLocations([place.id], true));
+  document.getElementById("detailPreviousButton").addEventListener("click", () => {
+    if (!previousPlace) return;
+    state.selectedId = previousPlace.id;
+    renderAll();
+    focusOnLocations([previousPlace.id], true);
+  });
   document.getElementById("detailNextButton").addEventListener("click", () => {
     if (!nextPlace) return;
     state.selectedId = nextPlace.id;
     renderAll();
     focusOnLocations([nextPlace.id], true);
   });
+
+  detailCard.querySelectorAll("[data-detail-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const tab = button.dataset.detailTab;
+      if (!detailTabs.includes(tab)) return;
+      state.detailTab = tab;
+      if (tab === "references" && state.referenceLimit < REFERENCE_PAGE_SIZE) {
+        state.referenceLimit = REFERENCE_PAGE_SIZE;
+      }
+      renderDetails(place, visiblePlaces);
+    });
+  });
+
+  const referenceSearchInput = document.getElementById("referenceSearchInput");
+  if (referenceSearchInput) {
+    referenceSearchInput.addEventListener("input", () => {
+      state.referenceSearch = referenceSearchInput.value;
+      state.referenceLimit = REFERENCE_PAGE_SIZE;
+      renderReferenceResults(place);
+    });
+  }
+
+  renderReferenceResults(place);
 }
 
 function renderPlaceList(visiblePlaces) {
@@ -855,10 +1307,14 @@ function renderMiniCard(place) {
     ? `<span class="mini-card-route">${escapeHtml(route.title)}</span>`
     : "";
   const modernName = place.bestIdentification?.modern?.name || place.bestIdentification?.name || "modern candidate";
+  const summary = referenceSummaryForPlace(place);
 
   miniCard.innerHTML = `
     <strong>${escapeHtml(place.name)}</strong>
-    <span class="mini-card-meta">${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence / ${escapeHtml(modernName)}</span>
+    <span class="mini-card-meta">
+      ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence · ${pluralize(summary.bookCount, "book")} · ${pluralize(summary.total, "ref")}
+    </span>
+    <span>${escapeHtml(modernName)}</span>
     ${routeNote}
   `;
 }

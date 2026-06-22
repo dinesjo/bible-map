@@ -33,6 +33,25 @@ const osisBookNames = new Map([
   ["2John", "2 John"], ["3John", "3 John"], ["Jude", "Jude"], ["Rev", "Rev"]
 ]);
 
+const bookLabels = new Map([
+  ["Gen", "Genesis"], ["Exod", "Exodus"], ["Lev", "Leviticus"], ["Num", "Numbers"], ["Deut", "Deuteronomy"],
+  ["Josh", "Joshua"], ["Judg", "Judges"], ["Ruth", "Ruth"],
+  ["1 Sam", "1 Samuel"], ["2 Sam", "2 Samuel"], ["1 Kgs", "1 Kings"], ["2 Kgs", "2 Kings"],
+  ["1 Chr", "1 Chronicles"], ["2 Chr", "2 Chronicles"], ["Ezra", "Ezra"], ["Neh", "Nehemiah"], ["Esth", "Esther"],
+  ["Job", "Job"], ["Ps", "Psalms"], ["Prov", "Proverbs"], ["Eccl", "Ecclesiastes"], ["Song", "Song of Songs"],
+  ["Isa", "Isaiah"], ["Jer", "Jeremiah"], ["Lam", "Lamentations"], ["Ezek", "Ezekiel"], ["Dan", "Daniel"],
+  ["Hos", "Hosea"], ["Joel", "Joel"], ["Amos", "Amos"], ["Obad", "Obadiah"], ["Jonah", "Jonah"],
+  ["Mic", "Micah"], ["Nah", "Nahum"], ["Hab", "Habakkuk"], ["Zeph", "Zephaniah"], ["Hag", "Haggai"],
+  ["Zech", "Zechariah"], ["Mal", "Malachi"],
+  ["Matt", "Matthew"], ["Mark", "Mark"], ["Luke", "Luke"], ["John", "John"], ["Acts", "Acts"],
+  ["Rom", "Romans"], ["1 Cor", "1 Corinthians"], ["2 Cor", "2 Corinthians"], ["Gal", "Galatians"],
+  ["Eph", "Ephesians"], ["Phil", "Philippians"], ["Col", "Colossians"],
+  ["1 Thess", "1 Thessalonians"], ["2 Thess", "2 Thessalonians"],
+  ["1 Tim", "1 Timothy"], ["2 Tim", "2 Timothy"], ["Titus", "Titus"], ["Phlm", "Philemon"], ["Heb", "Hebrews"],
+  ["Jas", "James"], ["1 Pet", "1 Peter"], ["2 Pet", "2 Peter"], ["1 John", "1 John"],
+  ["2 John", "2 John"], ["3 John", "3 John"], ["Jude", "Jude"], ["Rev", "Revelation"]
+]);
+
 const newTestamentStart = bookOrder.indexOf("Matt");
 
 function confidenceBand(score) {
@@ -84,14 +103,86 @@ function bookFromOsis(osis) {
   return osisBookNames.get(osisBook) || osisBook || null;
 }
 
+function testamentFromBook(bookId) {
+  const index = bookOrder.indexOf(bookId);
+  if (index === -1) return null;
+  return index >= newTestamentStart ? "NT" : "OT";
+}
+
+function bookIndex(bookId) {
+  const index = bookOrder.indexOf(bookId);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+function parseReference(verse) {
+  const readable = typeof verse?.readable === "string" ? verse.readable.trim() : "";
+  const osis = typeof verse?.osis === "string" ? verse.osis.trim() : "";
+  if (!readable || !osis) return null;
+
+  const [osisBook, chapterPart, versePart] = osis.split(".");
+  const bookId = osisBookNames.get(osisBook) || osisBook || null;
+  const chapter = Number.parseInt(chapterPart, 10);
+  const verseNumber = Number.parseInt(versePart, 10);
+  const testament = testamentFromBook(bookId);
+  const safeBookIndex = bookIndex(bookId);
+  const safeChapter = Number.isInteger(chapter) ? chapter : 0;
+  const safeVerse = Number.isInteger(verseNumber) ? verseNumber : 0;
+
+  return {
+    bookId,
+    bookLabel: bookLabels.get(bookId) || bookId,
+    testament,
+    chapter: Number.isInteger(chapter) ? chapter : null,
+    verse: Number.isInteger(verseNumber) ? verseNumber : null,
+    readable,
+    osis,
+    sort: (safeBookIndex * 1000000) + (safeChapter * 1000) + safeVerse
+  };
+}
+
 function testamentsFromBooks(books) {
   const values = new Set();
   books.forEach((book) => {
-    const index = bookOrder.indexOf(book);
-    if (index === -1) return;
-    values.add(index >= newTestamentStart ? "NT" : "OT");
+    const testament = testamentFromBook(book);
+    if (testament) values.add(testament);
   });
   return [...values];
+}
+
+function summarizeReferences(referenceDetails) {
+  const bookCounts = new Map();
+  let oldTestamentCount = 0;
+  let newTestamentCount = 0;
+
+  referenceDetails.forEach((reference) => {
+    if (reference.testament === "OT") oldTestamentCount += 1;
+    if (reference.testament === "NT") newTestamentCount += 1;
+    if (!reference.bookId) return;
+
+    const existing = bookCounts.get(reference.bookId) || {
+      bookId: reference.bookId,
+      bookLabel: reference.bookLabel || reference.bookId,
+      testament: reference.testament,
+      count: 0
+    };
+    existing.count += 1;
+    bookCounts.set(reference.bookId, existing);
+  });
+
+  const topBooks = [...bookCounts.values()]
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return bookIndex(a.bookId) - bookIndex(b.bookId);
+    })
+    .slice(0, 5);
+
+  return {
+    total: referenceDetails.length,
+    bookCount: bookCounts.size,
+    oldTestamentCount,
+    newTestamentCount,
+    topBooks
+  };
 }
 
 function modernOpenBibleUrl(modern) {
@@ -180,10 +271,13 @@ function buildPlace(ancient, modernById) {
   const best = summarizeIdentification(bestIdentification, modernById);
   if (!best || !Number.isFinite(best.lng) || !Number.isFinite(best.lat)) return null;
 
-  const references = (ancient.verses || [])
-    .map((verse) => verse.readable)
-    .filter((value) => typeof value === "string" && value.trim().length > 0);
-  const books = sortBooks(new Set((ancient.verses || []).map((verse) => bookFromOsis(verse.osis)).filter(Boolean)));
+  const referenceDetails = (ancient.verses || [])
+    .map(parseReference)
+    .filter(Boolean)
+    .sort((a, b) => a.sort - b.sort);
+  const references = referenceDetails.map((reference) => reference.readable);
+  const books = sortBooks(new Set(referenceDetails.map((reference) => reference.bookId).filter(Boolean)));
+  const referenceSummary = summarizeReferences(referenceDetails);
   const sourceCount = Object.keys(ancient.identification_sources || {}).length;
 
   return {
@@ -198,6 +292,8 @@ function buildPlace(ancient, modernById) {
     books,
     verseCount: references.length,
     references,
+    referenceDetails,
+    referenceSummary,
     bestIdentification: best,
     alternatives: (ancient.identifications || [])
       .slice(1)
