@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="sv">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -9,15 +9,15 @@
   <link rel="preload" href="/fonts/Newsreader-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/fonts/SourceSans3-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/src/styles.css">
-  <title>Bibellandskap | Interaktiv bibelkarta</title>
+  <title>Bible Map | Source-backed biblical geography</title>
 </head>
 <body>
   <main class="page">
     <header class="atlas-bar glass">
-      <a class="skip-link" href="#mapStage">Hoppa till kartan</a>
+      <a class="skip-link" href="#mapStage">Skip to map</a>
       <div class="brand-block">
-        <p class="eyebrow">Bibel 2000 • Atlas</p>
-        <h1>Bibellandskap</h1>
+        <p class="eyebrow">OpenBible data • Atlas</p>
+        <h1>Bible Map</h1>
       </div>
 
       <div class="route-picker" id="routePicker">
@@ -29,23 +29,26 @@
           aria-expanded="false"
           aria-controls="routeMenu"
         >
-          <span id="routePickerText">Hela kartan</span>
+          <span id="routePickerText">Whole map</span>
         </button>
-        <div class="route-menu" id="routeMenu" role="listbox" aria-label="Välj berättelsespår" hidden></div>
+        <div class="route-menu" id="routeMenu" role="listbox" aria-label="Choose editorial route" hidden></div>
       </div>
 
       <label class="search-shell" for="searchInput">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M10.5 3.5a7 7 0 1 1 0 14a7 7 0 0 1 0-14Zm0 2a5 5 0 1 0 0 10a5 5 0 0 0 0-10Zm8.9 11.48l1.42 1.42l-2.12 2.12l-1.42-1.42z"/>
         </svg>
-        <span class="sr-only">Sök plats, bok eller person</span>
-        <input id="searchInput" type="search" placeholder="Sök plats, bok eller person">
+        <span class="sr-only">Search place, book, reference, or modern location</span>
+        <input id="searchInput" type="search" placeholder="Search place, book, reference, or modern location">
       </label>
 
-      <nav class="atlas-actions" aria-label="Atlasverktyg">
+      <nav class="atlas-actions" aria-label="Atlas tools">
         <button class="tool-button" id="filterToggle" type="button" aria-expanded="false" aria-controls="filterPanel">
-          <span>Filter</span>
+          <span>Filters</span>
           <strong id="activeFilterCount">0</strong>
+        </button>
+        <button class="tool-button source-button" id="aboutToggle" type="button" aria-expanded="false" aria-controls="aboutPanel">
+          <span>Sources</span>
         </button>
       </nav>
     </header>
@@ -54,22 +57,22 @@
       <section class="map-panel glass" aria-labelledby="mapTitle">
         <div class="map-strip">
           <div>
-            <p class="section-label">Karta</p>
+            <p class="section-label">Map</p>
             <h2 id="mapTitle">Atlas</h2>
           </div>
           <div class="active-row" id="activeFilters" aria-live="polite"></div>
         </div>
 
-        <div class="map-stage" id="mapStage" tabindex="0" aria-label="Interaktiv karta över bibelns platser">
+        <div class="map-stage" id="mapStage" tabindex="0" aria-label="Interactive map of biblical places">
           <div id="maplibreMap" aria-hidden="true"></div>
           <div class="map-fallback" id="mapFallback">
             <div>
-              <strong>Kartbasen kunde inte laddas</strong>
-              <span>MapLibre-kartan kräver nätåtkomst till det publika baslagret.</span>
+              <strong>The basemap could not load</strong>
+              <span>The MapLibre basemap requires network access to the public tile layer.</span>
             </div>
           </div>
 
-          <button class="overlay compass" id="compassReset" type="button" aria-label="Återställ kartans utsnitt">
+          <button class="overlay compass" id="compassReset" type="button" aria-label="Reset map view">
             <svg viewBox="0 0 40 40" aria-hidden="true">
               <circle cx="20" cy="20" r="18" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
               <path d="M20 3l4 12l-4 4l-4-4Z" fill="#f0d39a"/>
@@ -77,43 +80,43 @@
               <path d="M20 20l10-10" stroke="rgba(255,255,255,0.4)" stroke-width="1.4"/>
               <path d="M20 20l-10 10" stroke="rgba(255,255,255,0.22)" stroke-width="1.4"/>
             </svg>
-            <small>Norr</small>
+            <small>North</small>
           </button>
 
           <div class="overlay mini-card" id="miniCard">
-            <strong>Vald plats</strong>
-            <span>Markera en plats på kartan.</span>
+            <strong>Selected place</strong>
+            <span>Select a place on the map.</span>
           </div>
 
-          <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Visa platslista" aria-expanded="false" aria-controls="placesPanel">
+          <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Show place list" aria-expanded="false" aria-controls="placesPanel">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M7 6.25h10M7 12h10M7 17.75h10" />
               <circle cx="4.5" cy="6.25" r="1" />
               <circle cx="4.5" cy="12" r="1" />
               <circle cx="4.5" cy="17.75" r="1" />
             </svg>
-            <span class="sr-only">Platser</span>
-            <strong id="visibleCount">32</strong>
+            <span class="sr-only">Places</span>
+            <strong id="visibleCount">0</strong>
           </button>
 
           <aside class="overlay map-places-panel glass" id="placesPanel" role="dialog" aria-modal="false" aria-labelledby="placesTitle" aria-hidden="true">
             <div class="drawer-head">
               <div>
-                <p class="section-label">Synliga platser</p>
-                <h2 class="drawer-title" id="placesTitle">Platslista</h2>
+                <p class="section-label">Visible places</p>
+                <h2 class="drawer-title" id="placesTitle">Place list</h2>
               </div>
               <div class="drawer-head-actions">
-                <span class="small-chip" id="listCounter">32 platser</span>
-                <button class="icon-button" id="placesClose" type="button" aria-label="Stäng platslista">×</button>
+                <span class="small-chip" id="listCounter">0 places</span>
+                <button class="icon-button" id="placesClose" type="button" aria-label="Close place list">×</button>
               </div>
             </div>
             <div class="place-list" id="placeList"></div>
           </aside>
 
           <div class="overlay zoom-controls">
-            <button class="zoom-button" id="zoomIn" type="button" aria-label="Zooma in">+</button>
-            <button class="zoom-button" id="zoomOut" type="button" aria-label="Zooma ut">−</button>
-            <button class="zoom-button" id="zoomHome" type="button" aria-label="Visa hela kartan">⌂</button>
+            <button class="zoom-button" id="zoomIn" type="button" aria-label="Zoom in">+</button>
+            <button class="zoom-button" id="zoomOut" type="button" aria-label="Zoom out">−</button>
+            <button class="zoom-button" id="zoomHome" type="button" aria-label="Show whole map">⌂</button>
           </div>
         </div>
       </section>
@@ -125,41 +128,52 @@
       <aside class="drawer-panel filter-panel glass" id="filterPanel" role="dialog" aria-modal="false" aria-labelledby="filterTitle" aria-hidden="true">
         <div class="drawer-head">
           <div>
-            <p class="section-label">Lager</p>
-            <h2 class="drawer-title" id="filterTitle">Filter</h2>
+            <p class="section-label">Layers</p>
+            <h2 class="drawer-title" id="filterTitle">Filters</h2>
           </div>
-          <button class="icon-button" id="filterClose" type="button" aria-label="Stäng filter">×</button>
+          <button class="icon-button" id="filterClose" type="button" aria-label="Close filters">×</button>
         </div>
 
         <div class="filter-stack">
           <div class="group-block">
-            <h3>Testamente</h3>
+            <h3>Testament</h3>
             <div class="filter-row" id="testamentFilters"></div>
           </div>
           <section class="group-block book-filter-block" aria-labelledby="bookFilterTitle">
-            <h3 id="bookFilterTitle">Bibelbok</h3>
+            <h3 id="bookFilterTitle">Book</h3>
             <div class="book-row" id="bookFilters"></div>
           </section>
           <div class="group-block">
-            <h3>Epok</h3>
-            <div class="filter-row" id="eraFilters"></div>
+            <h3>Confidence</h3>
+            <div class="filter-row" id="confidenceFilters"></div>
           </div>
           <details class="filter-more">
-            <summary>Gestalter</summary>
-            <div class="character-grid" id="characterFilters"></div>
+            <summary>Place types</summary>
+            <div class="character-grid" id="typeFilters"></div>
           </details>
         </div>
 
         <div class="drawer-actions">
-          <button class="ghost-button" id="clearFilters" type="button">Rensa</button>
-          <button class="ghost-button is-active" id="filterDone" type="button">Klar</button>
+          <button class="ghost-button" id="clearFilters" type="button">Clear</button>
+          <button class="ghost-button is-active" id="filterDone" type="button">Done</button>
         </div>
+      </aside>
+
+      <aside class="drawer-panel about-panel glass" id="aboutPanel" role="dialog" aria-modal="false" aria-labelledby="aboutTitle" aria-hidden="true">
+        <div class="drawer-head">
+          <div>
+            <p class="section-label">Data and license</p>
+            <h2 class="drawer-title" id="aboutTitle">Sources</h2>
+          </div>
+          <button class="icon-button" id="aboutClose" type="button" aria-label="Close sources">×</button>
+        </div>
+        <div class="about-content" id="aboutContent"></div>
       </aside>
 
       <div class="drawer-scrim" id="drawerScrim" hidden></div>
     </section>
 
-    <p class="sr-only" id="summaryText">Välj ett berättelsespår för att markera en resa på kartan.</p>
+    <p class="sr-only" id="summaryText">Choose a route to highlight an editorial path on the map.</p>
   </main>
 
   <script type="module" src="/src/app.js"></script>

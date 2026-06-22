@@ -1,37 +1,41 @@
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
-  INITIAL_MAP_BOUNDS,
-  HARD_MAP_BOUNDS,
-  anchorLabelIds,
-  eraMeta,
+  DEFAULT_SELECTED_PLACE_ID,
+  FALLBACK_MAP_BOUNDS,
   bookOrder,
-  featuredCharacters,
+  confidenceMeta,
   storyRoutes,
-  locations
+  testamentMeta
 } from "./data/atlas-data.js";
 
-const collator = new Intl.Collator("sv");
+const collator = new Intl.Collator("en", { sensitivity: "base" });
 const state = {
-  testament: "alla",
-  era: "alla",
-  book: "alla",
-  character: "alla",
+  testament: "all",
+  book: "all",
+  confidence: "all",
+  type: "all",
   route: null,
   search: "",
-  selectedId: "jerusalem"
+  selectedId: DEFAULT_SELECTED_PLACE_ID
 };
 
-const LABEL_DETAIL_ZOOM = 5.45;
+const SOURCE_ID = "openbible-places";
+const SELECTED_LAYER_ID = "openbible-place-selected";
+const CIRCLE_LAYER_ID = "openbible-place-circles";
+const LABEL_LAYER_ID = "openbible-place-labels";
+const ROUTE_LINE_SOURCE_ID = "story-route-line";
+const ROUTE_STOP_SOURCE_ID = "story-route-stops";
+const confidenceOrder = ["high", "medium", "low", "unknown"];
 
 const routePicker = document.getElementById("routePicker");
 const routePickerButton = document.getElementById("routePickerButton");
 const routePickerText = document.getElementById("routePickerText");
 const routeMenu = document.getElementById("routeMenu");
 const testamentFilters = document.getElementById("testamentFilters");
-const eraFilters = document.getElementById("eraFilters");
+const confidenceFilters = document.getElementById("confidenceFilters");
 const bookFilters = document.getElementById("bookFilters");
-const characterFilters = document.getElementById("characterFilters");
+const typeFilters = document.getElementById("typeFilters");
 const detailCard = document.getElementById("detailCard");
 const placeList = document.getElementById("placeList");
 const searchInput = document.getElementById("searchInput");
@@ -39,7 +43,6 @@ const summaryText = document.getElementById("summaryText");
 const visibleCount = document.getElementById("visibleCount");
 const activeFilterCount = document.getElementById("activeFilterCount");
 const listCounter = document.getElementById("listCounter");
-const legendList = document.getElementById("legendList");
 const activeFilters = document.getElementById("activeFilters");
 const miniCard = document.getElementById("miniCard");
 const compassReset = document.getElementById("compassReset");
@@ -48,7 +51,6 @@ const zoomOut = document.getElementById("zoomOut");
 const zoomHome = document.getElementById("zoomHome");
 const clearFilters = document.getElementById("clearFilters");
 const filterDone = document.getElementById("filterDone");
-const mapStage = document.getElementById("mapStage");
 const mapFallback = document.getElementById("mapFallback");
 const filterToggle = document.getElementById("filterToggle");
 const filterPanel = document.getElementById("filterPanel");
@@ -56,8 +58,12 @@ const filterClose = document.getElementById("filterClose");
 const placesToggle = document.getElementById("placesToggle");
 const placesPanel = document.getElementById("placesPanel");
 const placesClose = document.getElementById("placesClose");
+const aboutToggle = document.getElementById("aboutToggle");
+const aboutPanel = document.getElementById("aboutPanel");
+const aboutClose = document.getElementById("aboutClose");
+const aboutContent = document.getElementById("aboutContent");
 const drawerScrim = document.getElementById("drawerScrim");
-const filterModalSiblings = [
+const sheetModalSiblings = [
   document.querySelector(".atlas-bar"),
   document.querySelector(".map-panel"),
   document.getElementById("inspectorPanel")
@@ -69,25 +75,257 @@ const placesModalSiblings = [
 
 let map = null;
 let mapLoaded = false;
-let activePointMarkers = [];
-let activeLabelMarkers = [];
 let fallbackTimer = 0;
 let openDrawer = null;
 let drawerReturnFocus = null;
+let sourceMeta = null;
+let allPlaces = [];
+let placesById = new Map();
+let visiblePlacesCache = [];
 
-function syncCompass() {
-  if (!mapLoaded || !map) {
-    compassReset.style.setProperty("--compass-rotation", "0deg");
-    return;
-  }
-  compassReset.style.setProperty("--compass-rotation", `${-map.getBearing()}deg`);
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
-function setOverlayInert(filtersOpen, placesOpen) {
-  const elements = new Set([...filterModalSiblings, ...placesModalSiblings]);
+function bookSort(a, b) {
+  const aIndex = bookOrder.indexOf(a);
+  const bIndex = bookOrder.indexOf(b);
+  const safeA = aIndex === -1 ? Number.MAX_SAFE_INTEGER : aIndex;
+  const safeB = bIndex === -1 ? Number.MAX_SAFE_INTEGER : bIndex;
+  if (safeA !== safeB) return safeA - safeB;
+  return collator.compare(a, b);
+}
+
+function placeById(id) {
+  return placesById.get(id) || null;
+}
+
+function getActiveRoute() {
+  return state.route ? storyRoutes.find((route) => route.id === state.route) || null : null;
+}
+
+function confidenceWeight(confidence) {
+  return Math.max(0, confidenceOrder.length - confidenceOrder.indexOf(confidence));
+}
+
+function typeLabel(type) {
+  return type ? type.replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Place";
+}
+
+function confidenceLabel(confidence) {
+  const meta = confidenceMeta[confidence] || confidenceMeta.unknown;
+  return `${meta.label} (${meta.range})`;
+}
+
+function createSearchText(place) {
+  return [
+    place.name,
+    place.slug,
+    place.types.join(" "),
+    place.testaments.join(" "),
+    place.books.join(" "),
+    place.references.join(" "),
+    place.bestIdentification?.name,
+    place.bestIdentification?.description,
+    place.bestIdentification?.modern?.name,
+    place.bestIdentification?.modern?.precision,
+    place.alternatives.map((item) => `${item.name || ""} ${item.description || ""}`).join(" "),
+    Object.keys(place.translationNameCounts || {}).join(" ")
+  ].join(" ").toLowerCase();
+}
+
+function preparePlaces(places) {
+  allPlaces = places.map((place) => ({
+    ...place,
+    searchText: createSearchText(place)
+  }));
+  placesById = new Map(allPlaces.map((place) => [place.id, place]));
+}
+
+function uniqueBooks() {
+  return [...new Set(allPlaces.flatMap((place) => place.books))].sort(bookSort);
+}
+
+function uniqueTypes() {
+  const counts = new Map();
+  allPlaces.forEach((place) => {
+    place.types.forEach((type) => counts.set(type, (counts.get(type) || 0) + 1));
+  });
+  return [...counts.entries()]
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      return collator.compare(a[0], b[0]);
+    })
+    .map(([type, count]) => ({ type, count }));
+}
+
+function matchesFilters(place) {
+  const search = state.search.trim().toLowerCase();
+  return (state.testament === "all" || place.testaments.includes(state.testament))
+    && (state.book === "all" || place.books.includes(state.book))
+    && (state.confidence === "all" || place.confidence === state.confidence)
+    && (state.type === "all" || place.types.includes(state.type))
+    && (!search || place.searchText.includes(search));
+}
+
+function sortPlaces(list) {
+  const route = getActiveRoute();
+  return [...list].sort((a, b) => {
+    if (route) {
+      const aIndex = route.locations.indexOf(a.id);
+      const bIndex = route.locations.indexOf(b.id);
+      if (aIndex !== -1 || bIndex !== -1) {
+        if (aIndex === -1) return 1;
+        if (bIndex === -1) return -1;
+        return aIndex - bIndex;
+      }
+    }
+
+    const confidenceDelta = confidenceOrder.indexOf(a.confidence) - confidenceOrder.indexOf(b.confidence);
+    if (confidenceDelta !== 0) return confidenceDelta;
+    if (b.verseCount !== a.verseCount) return b.verseCount - a.verseCount;
+    return collator.compare(a.name, b.name);
+  });
+}
+
+function getVisiblePlaces() {
+  visiblePlacesCache = sortPlaces(allPlaces.filter(matchesFilters));
+  return visiblePlacesCache;
+}
+
+function normalizeSelection(visiblePlaces) {
+  if (visiblePlaces.some((place) => place.id === state.selectedId)) return;
+
+  const route = getActiveRoute();
+  if (route) {
+    const routeCandidate = route.locations.find((id) => visiblePlaces.some((place) => place.id === id));
+    if (routeCandidate) {
+      state.selectedId = routeCandidate;
+      return;
+    }
+  }
+
+  state.selectedId = visiblePlaces[0]?.id || null;
+}
+
+function getActiveFilterTokens() {
+  const tokens = [];
+  if (state.testament !== "all") tokens.push(testamentMeta[state.testament].label);
+  if (state.book !== "all") tokens.push(state.book);
+  if (state.confidence !== "all") tokens.push(`${confidenceMeta[state.confidence].label} confidence`);
+  if (state.type !== "all") tokens.push(typeLabel(state.type));
+  if (state.search.trim()) tokens.push(`"${state.search.trim()}"`);
+  return tokens;
+}
+
+function featureForPlace(place) {
+  const route = getActiveRoute();
+  const inRoute = Boolean(route && route.locations.includes(place.id));
+  const selected = place.id === state.selectedId;
+  const labelPriority = selected
+    ? 2000
+    : (inRoute ? 1200 : 0)
+      + Math.min(place.verseCount, 180)
+      + confidenceWeight(place.confidence) * 40
+      + (place.types.includes("settlement") ? 26 : 0);
+
+  return {
+    type: "Feature",
+    id: place.id,
+    properties: {
+      id: place.id,
+      name: place.name,
+      confidence: place.confidence,
+      confidenceLabel: confidenceMeta[place.confidence]?.label || "Unknown",
+      type: place.types[0] || "place",
+      typeLabel: typeLabel(place.types[0]),
+      books: place.books.slice(0, 3).join(" / "),
+      verseCount: place.verseCount,
+      selected,
+      inRoute,
+      muted: Boolean(route && !inRoute),
+      labelPriority
+    },
+    geometry: {
+      type: "Point",
+      coordinates: [place.lng, place.lat]
+    }
+  };
+}
+
+function featureCollection(features = []) {
+  return { type: "FeatureCollection", features };
+}
+
+function confidenceColorExpression() {
+  return [
+    "match",
+    ["get", "confidence"],
+    "high", confidenceMeta.high.color,
+    "medium", confidenceMeta.medium.color,
+    "low", confidenceMeta.low.color,
+    "unknown", confidenceMeta.unknown.color,
+    confidenceMeta.unknown.color
+  ];
+}
+
+function datasetBounds(withMargin = 0) {
+  const bounds = sourceMeta?.bounds || FALLBACK_MAP_BOUNDS;
+  return [
+    [bounds[0][0] - withMargin, bounds[0][1] - withMargin],
+    [bounds[1][0] + withMargin, bounds[1][1] + withMargin]
+  ];
+}
+
+function fitDefaultView(animated = false) {
+  if (!mapLoaded || !map) return;
+  map.fitBounds(datasetBounds(), {
+    padding: { top: 44, right: 34, bottom: 34, left: 34 },
+    duration: animated ? 700 : 0
+  });
+}
+
+function focusOnLocations(ids, animated = true) {
+  if (!mapLoaded || !map) return;
+  const points = ids.map((id) => placeById(id)).filter(Boolean);
+  if (!points.length) return;
+
+  if (points.length === 1) {
+    const place = points[0];
+    const broadType = ["region", "island", "body of water", "river"].some((type) => place.types.includes(type));
+    map.easeTo({
+      center: [place.lng, place.lat],
+      zoom: broadType ? 5.4 : 7.5,
+      duration: animated ? 700 : 0
+    });
+    return;
+  }
+
+  const bounds = points.reduce((accumulator, place) => {
+    if (!accumulator) {
+      return new maplibregl.LngLatBounds([place.lng, place.lat], [place.lng, place.lat]);
+    }
+    accumulator.extend([place.lng, place.lat]);
+    return accumulator;
+  }, null);
+
+  map.fitBounds(bounds, {
+    padding: 56,
+    duration: animated ? 760 : 0
+  });
+}
+
+function setOverlayInert(filtersOpen, placesOpen, aboutOpen) {
+  const elements = new Set([...sheetModalSiblings, ...placesModalSiblings]);
   elements.forEach((element) => {
-    const inert = (filtersOpen && filterModalSiblings.includes(element))
-      || (placesOpen && placesModalSiblings.includes(element));
+    const inert = (filtersOpen || aboutOpen)
+      ? sheetModalSiblings.includes(element)
+      : placesOpen && placesModalSiblings.includes(element);
 
     if (inert) {
       element.setAttribute("inert", "");
@@ -107,15 +345,17 @@ function setDrawer(name, open) {
 
   const filtersOpen = openDrawer === "filters";
   const placesOpen = openDrawer === "places";
-  const hasOpenPanel = filtersOpen || placesOpen;
+  const aboutOpen = openDrawer === "about";
+  const hasOpenPanel = filtersOpen || placesOpen || aboutOpen;
 
   if (hasOpenPanel && !wasOpen) {
     const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const fallbackFocus = name === "filters" ? filterToggle : placesToggle;
+    const fallbackFocus = name === "filters" ? filterToggle : name === "places" ? placesToggle : aboutToggle;
     const activeElementIsUsable = activeElement
       && activeElement !== document.body
       && !filterPanel.contains(activeElement)
-      && !placesPanel.contains(activeElement);
+      && !placesPanel.contains(activeElement)
+      && !aboutPanel.contains(activeElement);
     drawerReturnFocus = activeElementIsUsable ? activeElement : fallbackFocus;
   }
 
@@ -123,18 +363,23 @@ function setDrawer(name, open) {
   document.body.classList.toggle("sheet-open", hasOpenPanel);
   document.body.classList.toggle("filters-open", filtersOpen);
   document.body.classList.toggle("places-open", placesOpen);
+  document.body.classList.toggle("about-open", aboutOpen);
   filterPanel.setAttribute("aria-hidden", String(!filtersOpen));
   placesPanel.setAttribute("aria-hidden", String(!placesOpen));
+  aboutPanel.setAttribute("aria-hidden", String(!aboutOpen));
   filterPanel.setAttribute("aria-modal", String(filtersOpen));
   placesPanel.setAttribute("aria-modal", String(placesOpen));
+  aboutPanel.setAttribute("aria-modal", String(aboutOpen));
   filterToggle.setAttribute("aria-expanded", String(filtersOpen));
   placesToggle.setAttribute("aria-expanded", String(placesOpen));
-  drawerScrim.hidden = !filtersOpen;
+  aboutToggle.setAttribute("aria-expanded", String(aboutOpen));
+  drawerScrim.hidden = !(filtersOpen || aboutOpen);
 
-  setOverlayInert(filtersOpen, placesOpen);
+  setOverlayInert(filtersOpen, placesOpen, aboutOpen);
 
   if (filtersOpen) filterClose.focus({ preventScroll: true });
   if (placesOpen) placesClose.focus({ preventScroll: true });
+  if (aboutOpen) aboutClose.focus({ preventScroll: true });
   if (hasOpenPanel) {
     window.scrollTo(scrollLeft, scrollTop);
     requestAnimationFrame(() => window.scrollTo(scrollLeft, scrollTop));
@@ -149,137 +394,15 @@ function closeDrawers() {
   setDrawer(null, false);
 }
 
-function getActiveFilterTokens() {
-  const tokens = [];
-  if (state.testament !== "alla") tokens.push(state.testament === "GT" ? "GT" : "NT");
-  if (state.era !== "alla") tokens.push(eraMeta[state.era].label);
-  if (state.book !== "alla") tokens.push(state.book);
-  if (state.character !== "alla") tokens.push(state.character);
-  if (state.search.trim()) tokens.push(`"${state.search.trim()}"`);
-  return tokens;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function bookSort(a, b) {
-  const aIndex = bookOrder.indexOf(a);
-  const bIndex = bookOrder.indexOf(b);
-  const safeA = aIndex === -1 ? Number.MAX_SAFE_INTEGER : aIndex;
-  const safeB = bIndex === -1 ? Number.MAX_SAFE_INTEGER : bIndex;
-  if (safeA !== safeB) return safeA - safeB;
-  return collator.compare(a, b);
-}
-
-function getLocation(id) {
-  return locations.find((location) => location.id === id);
-}
-
-function uniqueBooks() {
-  return [...new Set(locations.flatMap((location) => location.references.map((item) => item.book)))].sort(bookSort);
-}
-
-function matchesFilters(location) {
-  const search = state.search.trim().toLowerCase();
-  const searchBlob = [
-    location.name,
-    location.region,
-    location.summary,
-    location.geography,
-    location.characters.join(" "),
-    location.references.map((item) => `${item.book} ${item.passages}`).join(" ")
-  ].join(" ").toLowerCase();
-
-  return (state.testament === "alla" || location.testaments.includes(state.testament))
-    && (state.era === "alla" || location.eras.includes(state.era))
-    && (state.book === "alla" || location.references.some((item) => item.book === state.book))
-    && (state.character === "alla" || location.characters.includes(state.character))
-    && (!search || searchBlob.includes(search));
-}
-
-function sortLocations(list) {
-  const eraOrder = ["patriarker", "exodus", "kungar_profeter", "jesu_liv", "urkyrkan"];
-  const route = state.route ? storyRoutes.find((item) => item.id === state.route) : null;
-
-  return [...list].sort((a, b) => {
-    if (route) {
-      const aRouteIndex = route.locations.indexOf(a.id);
-      const bRouteIndex = route.locations.indexOf(b.id);
-      if (aRouteIndex !== -1 || bRouteIndex !== -1) {
-        if (aRouteIndex === -1) return 1;
-        if (bRouteIndex === -1) return -1;
-        return aRouteIndex - bRouteIndex;
-      }
-    }
-    const aEra = Math.min(...a.eras.map((era) => eraOrder.indexOf(era)).filter((index) => index >= 0));
-    const bEra = Math.min(...b.eras.map((era) => eraOrder.indexOf(era)).filter((index) => index >= 0));
-    if (aEra !== bEra) return aEra - bEra;
-    return collator.compare(a.name, b.name);
-  });
-}
-
-function getVisibleLocations() {
-  return sortLocations(locations.filter(matchesFilters));
-}
-
-function normalizeSelection(visibleLocations) {
-  const selectedVisible = visibleLocations.some((location) => location.id === state.selectedId);
-  if (selectedVisible) return;
-
-  if (state.route) {
-    const route = storyRoutes.find((item) => item.id === state.route);
-    const candidate = route && route.locations.find((id) => visibleLocations.some((location) => location.id === id));
-    if (candidate) {
-      state.selectedId = candidate;
-      return;
-    }
-  }
-
-  state.selectedId = visibleLocations[0] ? visibleLocations[0].id : null;
-}
-
-function getActiveRoute() {
-  return state.route ? storyRoutes.find((route) => route.id === state.route) : null;
-}
-
-function getRoutePalette(route) {
-  if (!route) return eraMeta.jesu_liv;
-  return eraMeta[route.palette] || eraMeta[route.id] || eraMeta.jesu_liv;
-}
-
-function buildFilterChip(label, active, dataset, className = "toggle-chip", prefix = "") {
-  return `<button class="${className}${active ? " is-active" : ""}" type="button" ${dataset}>${prefix}${escapeHtml(label)}</button>`;
-}
-
-function buildEraChip(key, value, active) {
-  return buildFilterChip(
-    value.label,
-    active,
-    `data-era="${key}"`,
-    "toggle-chip era-chip",
-    `<span class="chip-swatch" style="background:${value.color};"></span>`
-  );
-}
-
 function getRouteOptions() {
   return [
-    { id: "", title: "Hela kartan", subtitle: "alla platser" },
+    { id: "", title: "Whole map", subtitle: `${allPlaces.length.toLocaleString("en-US")} source-backed places` },
     ...storyRoutes.map((route) => ({
       id: route.id,
       title: route.title,
       subtitle: route.subtitle
     }))
   ];
-}
-
-function getRouteLabel(option) {
-  return option.title;
 }
 
 function getCurrentRouteOption() {
@@ -303,7 +426,6 @@ function focusRouteOption(option) {
 
 function openRouteMenu(focusSelected = false) {
   if (openDrawer) closeDrawers();
-
   routePicker.classList.add("is-open");
   routePickerButton.setAttribute("aria-expanded", "true");
   routeMenu.hidden = false;
@@ -313,10 +435,8 @@ function openRouteMenu(focusSelected = false) {
       const selected = routeMenu.querySelector("[aria-selected='true']");
       focusRouteOption(selected || routeMenu.querySelector("[data-route-option]"));
     };
-
     focusSelectedOption();
     requestAnimationFrame(focusSelectedOption);
-    setTimeout(focusSelectedOption, 0);
   }
 }
 
@@ -326,6 +446,27 @@ function toggleRouteMenu() {
     return;
   }
   closeRouteMenu();
+}
+
+function handleRouteSelection(routeId) {
+  state.route = routeId || null;
+  const route = getActiveRoute();
+
+  if (route) {
+    const visible = getVisiblePlaces();
+    const firstVisibleRoutePlace = route.locations.find((id) => visible.some((place) => place.id === id));
+    if (firstVisibleRoutePlace) state.selectedId = firstVisibleRoutePlace;
+  }
+
+  renderAll();
+
+  if (route) {
+    const visibleIds = new Set(getVisiblePlaces().map((place) => place.id));
+    const ids = route.locations.filter((id) => visibleIds.has(id));
+    if (ids.length) focusOnLocations(ids, true);
+  } else {
+    fitDefaultView(true);
+  }
 }
 
 function selectRouteOption(routeId) {
@@ -403,24 +544,17 @@ function bindRoutePicker() {
     closeRouteMenu();
   });
 
-  document.addEventListener("keydown", (event) => {
-    if (routeMenu.hidden) return;
-    if (event.target === document.body) handleRouteMenuKeydown(event);
-    if (event.key === "Escape") closeRouteMenu(true);
-  });
-
   routePicker.dataset.bound = "true";
 }
 
 function renderRoutePicker() {
   const selected = getCurrentRouteOption();
-  routePickerText.textContent = getRouteLabel(selected);
+  routePickerText.textContent = selected.title;
   routeMenu.innerHTML = getRouteOptions().map((option) => {
     const isSelected = option.id === (state.route || "");
     return `
       <button
         class="route-option${isSelected ? " is-selected" : ""}"
-        id="route-option-${option.id || "all"}"
         type="button"
         role="option"
         aria-selected="${isSelected}"
@@ -435,71 +569,56 @@ function renderRoutePicker() {
   bindRoutePicker();
 }
 
-function handleRouteSelection(routeId) {
-  state.route = routeId || null;
-
-  if (state.route) {
-    const route = storyRoutes.find((item) => item.id === state.route);
-    const visible = getVisibleLocations();
-    const ids = route.locations.filter((id) => visible.some((location) => location.id === id));
-    if (ids.length) state.selectedId = ids[0];
-  }
-
-  renderAll();
-
-  if (state.route) {
-    const route = getActiveRoute();
-    const visible = getVisibleLocations();
-    const ids = route.locations.filter((id) => visible.some((location) => location.id === id));
-    if (ids.length) focusOnLocations(ids, true);
-  } else {
-    fitDefaultView(true);
-  }
+function buildFilterChip(label, active, dataset, className = "toggle-chip", prefix = "") {
+  return `<button class="${className}${active ? " is-active" : ""}" type="button" ${dataset}>${prefix}${escapeHtml(label)}</button>`;
 }
 
 function renderStaticControls() {
   renderRoutePicker();
 
   testamentFilters.innerHTML = [
-    buildFilterChip("Alla", state.testament === "alla", 'data-testament="alla"'),
-    buildFilterChip("Gamla testamentet", state.testament === "GT", 'data-testament="GT"'),
-    buildFilterChip("Nya testamentet", state.testament === "NT", 'data-testament="NT"')
-  ].join("");
-
-  eraFilters.innerHTML = [
-    buildFilterChip("Alla epoker", state.era === "alla", 'data-era="alla"'),
-    ...Object.entries(eraMeta).map(([key, value]) =>
-      buildEraChip(key, value, state.era === key)
+    buildFilterChip("All", state.testament === "all", 'data-testament="all"'),
+    ...Object.entries(testamentMeta).map(([key, meta]) =>
+      buildFilterChip(meta.label, state.testament === key, `data-testament="${key}"`)
     )
   ].join("");
 
+  confidenceFilters.innerHTML = [
+    buildFilterChip("All confidence", state.confidence === "all", 'data-confidence="all"'),
+    ...confidenceOrder.map((key) => {
+      const meta = confidenceMeta[key];
+      return buildFilterChip(
+        `${meta.label} (${meta.range})`,
+        state.confidence === key,
+        `data-confidence="${key}"`,
+        "toggle-chip era-chip",
+        `<span class="chip-swatch" style="background:${meta.color};"></span>`
+      );
+    })
+  ].join("");
+
   bookFilters.innerHTML = [
-    `<button class="book-chip${state.book === "alla" ? " is-active" : ""}" type="button" data-book="alla">Alla böcker</button>`,
+    `<button class="book-chip${state.book === "all" ? " is-active" : ""}" type="button" data-book="all">All books</button>`,
     ...uniqueBooks().map((book) => `
-      <button class="book-chip${state.book === book ? " is-active" : ""}" type="button" data-book="${book}">
+      <button class="book-chip${state.book === book ? " is-active" : ""}" type="button" data-book="${escapeHtml(book)}">
         ${escapeHtml(book)}
       </button>
     `)
   ].join("");
 
-  characterFilters.innerHTML = [
-    `<button class="character-button${state.character === "alla" ? " is-active" : ""}" type="button" data-character="alla">
-      <span class="character-copy"><strong>Alla gestalter</strong></span>
+  typeFilters.innerHTML = [
+    `<button class="character-button${state.type === "all" ? " is-active" : ""}" type="button" data-type="all">
+      <span class="character-copy"><strong>All types</strong></span>
     </button>`,
-    ...featuredCharacters.map((character) => `
-      <button class="character-button${state.character === character.name ? " is-active" : ""}" type="button" data-character="${character.name}" title="${escapeHtml(character.note)}">
-        <span class="character-copy"><strong>${escapeHtml(character.name)}</strong></span>
+    ...uniqueTypes().map(({ type, count }) => `
+      <button class="character-button${state.type === type ? " is-active" : ""}" type="button" data-type="${escapeHtml(type)}">
+        <span class="character-copy">
+          <strong>${escapeHtml(typeLabel(type))}</strong>
+          <small>${count.toLocaleString("en-US")}</small>
+        </span>
       </button>
     `)
   ].join("");
-
-  if (legendList) {
-    legendList.innerHTML = Object.values(eraMeta).map((entry) => `
-      <span class="small-chip">
-        <span class="legend-swatch" style="background:${entry.color};"></span>${escapeHtml(entry.label)}
-      </span>
-    `).join("");
-  }
 
   testamentFilters.querySelectorAll("[data-testament]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -508,9 +627,9 @@ function renderStaticControls() {
     });
   });
 
-  eraFilters.querySelectorAll("[data-era]").forEach((button) => {
+  confidenceFilters.querySelectorAll("[data-confidence]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.era = button.dataset.era;
+      state.confidence = button.dataset.confidence;
       renderAll();
     });
   });
@@ -522,21 +641,21 @@ function renderStaticControls() {
     });
   });
 
-  characterFilters.querySelectorAll("[data-character]").forEach((button) => {
+  typeFilters.querySelectorAll("[data-type]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.character = button.dataset.character;
+      state.type = button.dataset.type;
       renderAll();
     });
   });
 }
 
-function renderActiveFilters(visibleLocations) {
+function renderActiveFilters(visiblePlaces) {
   const tokens = getActiveFilterTokens();
   activeFilterCount.textContent = String(tokens.length);
   activeFilterCount.hidden = tokens.length === 0;
 
   if (!tokens.length) {
-    activeFilters.innerHTML = `<span class="status-pill">${visibleLocations.length} platser</span>`;
+    activeFilters.innerHTML = `<span class="status-pill">${visiblePlaces.length.toLocaleString("en-US")} places</span>`;
     return;
   }
 
@@ -545,120 +664,161 @@ function renderActiveFilters(visibleLocations) {
   activeFilters.innerHTML = [
     ...visibleTokens.map((token) => `<span class="tag">${escapeHtml(token)}</span>`),
     remainder ? `<span class="tag">+${remainder}</span>` : "",
-    `<span class="status-pill">${visibleLocations.length} platser</span>`
+    `<span class="status-pill">${visiblePlaces.length.toLocaleString("en-US")} places</span>`
   ].filter(Boolean).join(" ");
 }
 
-function formatRefChip(ref) {
-  return `<span class="ref-chip">${escapeHtml(ref.book)} ${escapeHtml(ref.passages)}</span>`;
+function formatReferences(place, limit = 36) {
+  if (!place.references.length) return `<span class="empty-inline">No direct verse references in the imported record.</span>`;
+  const visible = place.references.slice(0, limit).map((reference) => `<span class="ref-chip">${escapeHtml(reference)}</span>`);
+  const hidden = place.references.length - visible.length;
+  return [
+    ...visible,
+    hidden > 0 ? `<span class="ref-more">+${hidden.toLocaleString("en-US")} more</span>` : ""
+  ].join("");
 }
 
-function renderDetails(location, visibleLocations) {
-  if (!location) {
+function renderDetails(place, visiblePlaces) {
+  if (!place) {
     detailCard.innerHTML = `
-      <p class="section-label">Vald plats</p>
-      <h2 class="detail-title">Ingen träff</h2>
-      <div class="empty-state">Justera filtren eller rensa sökningen för att se fler platser igen.</div>
+      <p class="section-label">Selected place</p>
+      <h2 class="detail-title">No match</h2>
+      <div class="empty-state">Adjust the filters or clear search to see source-backed places.</div>
     `;
     return;
   }
 
-  const eraChips = location.eras.map((era) => `<span class="small-chip">${escapeHtml(eraMeta[era].label)}</span>`).join("");
-  const testamentLabels = location.testaments.map((testament) => testament === "GT" ? "Gamla testamentet" : "Nya testamentet");
-  const characters = [...new Set(location.characters)].map((character) => `<span class="small-chip">${escapeHtml(character)}</span>`).join("");
-  const relatedRouteList = storyRoutes
-    .filter((route) => route.locations.includes(location.id))
-    .map((route) => route.title);
-  const relatedRoutes = relatedRouteList
-    .map((title) => `<span class="small-chip">${escapeHtml(title)}</span>`)
-    .join("");
-  const references = location.references.map(formatRefChip).join("");
   const route = getActiveRoute();
-  const routePosition = route && route.locations.includes(location.id)
-    ? route.locations.indexOf(location.id) + 1
+  const routePosition = route && route.locations.includes(place.id)
+    ? route.locations.indexOf(place.id) + 1
     : null;
   const routeNote = routePosition
-    ? `<span class="route-step">Steg ${routePosition} i ${escapeHtml(route.title)}</span>`
+    ? `<span class="route-step">Step ${routePosition} in ${escapeHtml(route.title)}</span>`
+    : "";
+  const relatedRoutes = storyRoutes.filter((item) => item.locations.includes(place.id));
+  const modern = place.bestIdentification?.modern;
+  const modernName = modern?.name || place.bestIdentification?.name || "No named modern candidate";
+  const candidateText = place.bestIdentification?.description || modernName;
+  const books = place.books.length ? place.books.join(", ") : "No book metadata";
+  const testaments = place.testaments.map((testament) => testamentMeta[testament]?.label || testament).join(", ") || "No testament metadata";
+  const alternatives = place.alternatives.length
+    ? place.alternatives.map((alternative) => `
+      <li>
+        <strong>${escapeHtml(alternative.name || alternative.description || "Alternative identification")}</strong>
+        <span>${escapeHtml(confidenceLabel(alternative.confidence))}${Number.isFinite(alternative.score) ? ` / score ${alternative.score}` : ""}</span>
+      </li>
+    `).join("")
+    : `<li><strong>No alternate identification in the imported record.</strong><span>OpenBible records this as a single best candidate.</span></li>`;
+  const wikidataLink = place.links.wikidata
+    ? `<a class="detail-link" href="${escapeHtml(place.links.wikidata.url)}" target="_blank" rel="noreferrer">Wikidata ${escapeHtml(place.links.wikidata.id)}</a>`
+    : "";
+  const openBibleModernLink = modern?.url
+    ? `<a class="detail-link" href="${escapeHtml(modern.url)}" target="_blank" rel="noreferrer">Modern candidate</a>`
     : "";
 
   detailCard.innerHTML = `
-    <p class="section-label">Vald plats</p>
+    <p class="section-label">Selected place</p>
     <div class="detail-head">
       <div class="detail-subtitle">
-        <h2 class="detail-title">${escapeHtml(location.name)}</h2>
-        <span class="detail-region">${escapeHtml(location.region)}</span>
+        <h2 class="detail-title">${escapeHtml(place.name)}</h2>
+        <span class="detail-region">${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(modernName)}</span>
       </div>
       ${routeNote}
     </div>
-    <p class="detail-summary">${escapeHtml(location.summary)}</p>
+    <p class="detail-summary">
+      OpenBible resolves this biblical place to <strong>${escapeHtml(candidateText)}</strong>.
+      The confidence band is <strong>${escapeHtml(confidenceLabel(place.confidence))}</strong>.
+    </p>
     <div class="detail-actions">
-      <button class="ghost-button is-active" id="detailFocusButton" type="button">Visa på kartan</button>
-      <button class="ghost-button" id="detailNextButton" type="button">Nästa synliga plats</button>
+      <button class="ghost-button is-active" id="detailFocusButton" type="button">Show on map</button>
+      <button class="ghost-button" id="detailNextButton" type="button">Next visible place</button>
+      <a class="ghost-button detail-action-link" href="${escapeHtml(place.links.openBible)}" target="_blank" rel="noreferrer">OpenBible record</a>
     </div>
     <div class="detail-meta-grid">
       <div class="detail-stat">
-        <span>Bibelböcker</span>
-        <strong>${escapeHtml(location.primaryBooks.join(", "))}</strong>
+        <span>Confidence</span>
+        <strong><span class="confidence-pill confidence-${escapeHtml(place.confidence)}">${escapeHtml(confidenceLabel(place.confidence))}</span></strong>
       </div>
       <div class="detail-stat">
-        <span>Testamente</span>
-        <strong>${escapeHtml(testamentLabels.join(", "))}</strong>
+        <span>Modern candidate</span>
+        <strong>${escapeHtml(modernName)}</strong>
       </div>
       <div class="detail-stat">
-        <span>Epoker</span>
-        <div class="detail-chip-row">${eraChips}</div>
+        <span>References</span>
+        <strong>${place.verseCount.toLocaleString("en-US")} verse${place.verseCount === 1 ? "" : "s"}</strong>
       </div>
       <div class="detail-stat">
-        <span>Berättelsespår</span>
-        <strong>${relatedRouteList.length ? escapeHtml(relatedRouteList.join(", ")) : "Inget markerat spår"}</strong>
+        <span>Sources / votes</span>
+        <strong>${place.sourceCount.toLocaleString("en-US")} sources / ${place.voteCount ?? "n/a"} votes</strong>
+      </div>
+      <div class="detail-stat">
+        <span>Books</span>
+        <strong>${escapeHtml(books)}</strong>
+      </div>
+      <div class="detail-stat">
+        <span>Testament</span>
+        <strong>${escapeHtml(testaments)}</strong>
       </div>
     </div>
     <section class="detail-section">
-      <h3>Geografisk notis</h3>
-      <p class="detail-note">${escapeHtml(location.geography)}</p>
+      <h3>Identification</h3>
+      <p class="detail-note">${escapeHtml(candidateText)}</p>
+      <div class="detail-chip-row">
+        ${place.types.map((type) => `<span class="small-chip">${escapeHtml(typeLabel(type))}</span>`).join("")}
+        <span class="small-chip">${escapeHtml(place.lng)}, ${escapeHtml(place.lat)}</span>
+      </div>
     </section>
     <section class="detail-section">
-      <h3>Hänvisningar</h3>
-      <div class="reference-line detail-reference-list">${references}</div>
+      <h3>Alternative identifications</h3>
+      <ul class="alternative-list">${alternatives}</ul>
     </section>
-    ${relatedRoutes ? `
+    <section class="detail-section">
+      <h3>References</h3>
+      <div class="reference-line detail-reference-list">${formatReferences(place)}</div>
+    </section>
+    ${relatedRoutes.length ? `
       <section class="detail-section">
-        <h3>Berättelsespår</h3>
-        <div class="detail-chip-row">${relatedRoutes}</div>
+        <h3>Editorial routes</h3>
+        <div class="detail-chip-row">${relatedRoutes.map((item) => `<span class="small-chip">${escapeHtml(item.title)}</span>`).join("")}</div>
       </section>
     ` : ""}
     <section class="detail-section">
-      <h3>Gestalter</h3>
-      <div class="detail-chip-row">${characters}</div>
+      <h3>Source links</h3>
+      <div class="source-link-row">
+        <a class="detail-link" href="${escapeHtml(place.links.openBible)}" target="_blank" rel="noreferrer">Ancient place</a>
+        ${openBibleModernLink}
+        ${wikidataLink}
+      </div>
+      <p class="detail-source-note">Imported from OpenBible.info Bible Geocoding Data, ${escapeHtml(sourceMeta.license)}. Markup has been stripped and the record has been reshaped for this app.</p>
     </section>
   `;
 
-  const currentIndex = visibleLocations.findIndex((item) => item.id === location.id);
-  const nextLocation = currentIndex >= 0 ? visibleLocations[(currentIndex + 1) % visibleLocations.length] : null;
+  const currentIndex = visiblePlaces.findIndex((item) => item.id === place.id);
+  const nextPlace = currentIndex >= 0 ? visiblePlaces[(currentIndex + 1) % visiblePlaces.length] : null;
 
-  document.getElementById("detailFocusButton").addEventListener("click", () => focusOnLocations([location.id], true));
+  document.getElementById("detailFocusButton").addEventListener("click", () => focusOnLocations([place.id], true));
   document.getElementById("detailNextButton").addEventListener("click", () => {
-    if (!nextLocation) return;
-    state.selectedId = nextLocation.id;
+    if (!nextPlace) return;
+    state.selectedId = nextPlace.id;
     renderAll();
-    focusOnLocations([nextLocation.id], true);
+    focusOnLocations([nextPlace.id], true);
   });
 }
 
-function renderPlaceList(visibleLocations) {
-  if (!visibleLocations.length) {
-    placeList.innerHTML = `<div class="empty-state">Inga platser matchar kombinationen av filter och sökning.</div>`;
+function renderPlaceList(visiblePlaces) {
+  if (!visiblePlaces.length) {
+    placeList.innerHTML = `<div class="empty-state">No places match the current search and filters.</div>`;
     return;
   }
 
-  placeList.innerHTML = visibleLocations.map((location, index) => `
-    <button class="place-row${state.selectedId === location.id ? " is-selected" : ""}" type="button" data-place="${location.id}">
+  placeList.innerHTML = visiblePlaces.map((place, index) => `
+    <button class="place-row${state.selectedId === place.id ? " is-selected" : ""}" type="button" data-place="${escapeHtml(place.id)}">
       <span class="place-index">${String(index + 1).padStart(2, "0")}</span>
       <div class="place-row-copy">
-        <small>${escapeHtml(location.region)}</small>
-        <strong>${escapeHtml(location.name)}</strong>
+        <small>${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")}</small>
+        <strong>${escapeHtml(place.name)}</strong>
       </div>
-      <span class="place-books">${escapeHtml(location.primaryBooks.slice(0, 3).join(" • "))}</span>
+      <span class="place-books">${escapeHtml(place.books.slice(0, 3).join(" / ") || `${place.verseCount} refs`)}</span>
     </button>
   `).join("");
 
@@ -672,205 +832,81 @@ function renderPlaceList(visibleLocations) {
   });
 }
 
-function renderSummary(visibleLocations) {
+function renderSummary(visiblePlaces) {
   const route = getActiveRoute();
-  visibleCount.textContent = String(visibleLocations.length);
-  placesToggle.setAttribute("aria-label", `Visa ${visibleLocations.length} synliga platser`);
-  listCounter.textContent = `${visibleLocations.length} plats${visibleLocations.length === 1 ? "" : "er"}`;
+  visibleCount.textContent = visiblePlaces.length.toLocaleString("en-US");
+  placesToggle.setAttribute("aria-label", `Show ${visiblePlaces.length.toLocaleString("en-US")} visible places`);
+  listCounter.textContent = `${visiblePlaces.length.toLocaleString("en-US")} place${visiblePlaces.length === 1 ? "" : "s"}`;
 
-  if (!route) {
-    summaryText.textContent = "Hela kartan visas.";
-    return;
-  }
-
-  summaryText.textContent = route.description;
+  summaryText.textContent = route ? route.description : "The whole OpenBible snapshot is visible.";
 }
 
-function renderMiniCard(location) {
-  if (!location) {
+function renderMiniCard(place) {
+  if (!place) {
     miniCard.innerHTML = `
-      <strong>Ingen vald plats</strong>
-      <span>Justera filtren eller välj en synlig markör för att se en kort platsöverblick.</span>
+      <strong>No selected place</strong>
+      <span>Adjust filters or select a visible map point.</span>
     `;
     return;
   }
 
   const route = getActiveRoute();
-  const books = location.primaryBooks.slice(0, 3).join(" • ");
-  const routeNote = route && route.locations.includes(location.id)
+  const routeNote = route && route.locations.includes(place.id)
     ? `<span class="mini-card-route">${escapeHtml(route.title)}</span>`
     : "";
+  const modernName = place.bestIdentification?.modern?.name || place.bestIdentification?.name || "modern candidate";
 
   miniCard.innerHTML = `
-    <strong>${escapeHtml(location.name)}</strong>
-    <span class="mini-card-meta">${escapeHtml(location.region)} • ${escapeHtml(books)}</span>
+    <strong>${escapeHtml(place.name)}</strong>
+    <span class="mini-card-meta">${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence / ${escapeHtml(modernName)}</span>
     ${routeNote}
   `;
 }
 
-function buildLabelHtml(location, meta) {
-  const books = location.primaryBooks.slice(0, 2).join(" • ");
-  return `
-    <span class="label-shell" style="--label-color:${meta.color};">
-      <span class="label-dot"></span>
-      <span class="label-copy">
-        <span class="label-name">${escapeHtml(location.name)}</span>
-        <span class="label-books">${escapeHtml(books)}</span>
-      </span>
-    </span>
+function renderAbout() {
+  const generated = sourceMeta?.generatedAt
+    ? new Date(sourceMeta.generatedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+    : "unknown";
+  const counts = sourceMeta?.counts || { ancient: 0, resolved: 0, unresolved: 0 };
+
+  aboutContent.innerHTML = `
+    <section class="about-section">
+      <h3>Data snapshot</h3>
+      <p>
+        This app uses a pinned snapshot of <a href="${escapeHtml(sourceMeta.sourceUrl)}" target="_blank" rel="noreferrer">OpenBible.info Bible Geocoding Data</a>.
+        It is not fetched live in the browser or in CI.
+      </p>
+      <div class="detail-meta-grid">
+        <div class="detail-stat"><span>Generated</span><strong>${escapeHtml(generated)}</strong></div>
+        <div class="detail-stat"><span>Commit</span><strong>${escapeHtml(sourceMeta.commit.slice(0, 12))}</strong></div>
+        <div class="detail-stat"><span>Resolved places</span><strong>${counts.resolved.toLocaleString("en-US")}</strong></div>
+        <div class="detail-stat"><span>Unresolved records</span><strong>${counts.unresolved.toLocaleString("en-US")}</strong></div>
+      </div>
+    </section>
+    <section class="about-section">
+      <h3>License and attribution</h3>
+      <p>
+        Geodata is adapted from OpenBible.info Bible Geocoding Data under
+        <a href="${escapeHtml(sourceMeta.licenseUrl)}" target="_blank" rel="noreferrer">${escapeHtml(sourceMeta.license)}</a>.
+        Imported records are reshaped for this application; embedded markup is stripped and images/OSM-derived geometry are not included in this version.
+      </p>
+    </section>
+    <section class="about-section">
+      <h3>Uncertainty</h3>
+      <p>
+        Biblical geography often involves disputed identifications. Confidence bands expose OpenBible's scoring instead of hiding uncertainty.
+        A point should be read as the best imported candidate, not as a guaranteed exact location.
+      </p>
+    </section>
   `;
 }
 
-function labelMarkerOptions(location) {
-  const direction = location.labelDirection || "top";
-  const tweak = location.labelOffset || [0, 0];
-  const config = {
-    left: { anchor: "right", offset: [-20 + tweak[0], tweak[1]] },
-    right: { anchor: "left", offset: [20 + tweak[0], tweak[1]] },
-    top: { anchor: "bottom", offset: [tweak[0], -20 + tweak[1]] },
-    bottom: { anchor: "top", offset: [tweak[0], 20 + tweak[1]] }
-  };
-  return config[direction] || config.top;
-}
-
-function shouldShowLabel(location) {
-  if (!mapLoaded || !map) return true;
-  if (location.id === state.selectedId) return true;
-  if (map.getZoom() >= LABEL_DETAIL_ZOOM) return true;
-  const route = getActiveRoute();
-  if (route && route.locations.includes(location.id)) return true;
-  return anchorLabelIds.has(location.id);
-}
-
-function estimateLabelSize(location, selected) {
-  const books = location.primaryBooks.slice(0, 2).join(" • ");
-  const nameWidth = location.name.length * 8.5;
-  const booksWidth = selected ? books.length * 6.4 : 0;
-  return {
-    width: Math.min(184, Math.max(74, 38 + Math.max(nameWidth, booksWidth))),
-    height: selected ? 47 : 34
-  };
-}
-
-function getLabelScreenBox(location, labelConfig, selected) {
-  const point = map.project([location.lng, location.lat]);
-  const size = estimateLabelSize(location, selected);
-  const offset = labelConfig.offset || [0, 0];
-  const x = point.x + offset[0];
-  const y = point.y + offset[1];
-
-  const positions = {
-    bottom: { left: x - size.width / 2, top: y - size.height },
-    top: { left: x - size.width / 2, top: y },
-    left: { left: x, top: y - size.height / 2 },
-    right: { left: x - size.width, top: y - size.height / 2 },
-    center: { left: x - size.width / 2, top: y - size.height / 2 }
-  };
-  const position = positions[labelConfig.anchor] || positions.center;
-
-  return {
-    left: position.left,
-    top: position.top,
-    right: position.left + size.width,
-    bottom: position.top + size.height
-  };
-}
-
-function expandBox(box, amount) {
-  return {
-    left: box.left - amount,
-    top: box.top - amount,
-    right: box.right + amount,
-    bottom: box.bottom + amount
-  };
-}
-
-function boxesOverlap(a, b) {
-  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
-}
-
-function isLabelBoxNearViewport(box) {
-  const container = map.getContainer();
-  const gutter = 18;
-  return box.right >= -gutter
-    && box.left <= container.clientWidth + gutter
-    && box.bottom >= -gutter
-    && box.top <= container.clientHeight + gutter;
-}
-
-function getLabelPriority(location, selected, route) {
-  if (selected) return 1000;
-
-  let priority = 0;
-  if (route) {
-    const routeIndex = route.locations.indexOf(location.id);
-    priority += routeIndex >= 0 ? 720 - routeIndex : -240;
+function syncCompass() {
+  if (!mapLoaded || !map) {
+    compassReset.style.setProperty("--compass-rotation", "0deg");
+    return;
   }
-  if (anchorLabelIds.has(location.id)) priority += 360;
-  if (location.focusZoom && location.focusZoom <= 7) priority += 35;
-  priority += Math.round(Math.min(map.getZoom(), 10) * 10);
-  return priority;
-}
-
-function getLabelCollisionGap() {
-  const width = map.getContainer().clientWidth;
-  if (width < 560) return 13;
-  if (width < 920) return 10;
-  return 8;
-}
-
-function getVisibleLabelCandidates(visibleLocations, route, routeIds) {
-  const candidates = visibleLocations
-    .filter(shouldShowLabel)
-    .map((location) => {
-      const selected = location.id === state.selectedId;
-      const muted = Boolean(route) && !routeIds.has(location.id);
-      const labelConfig = labelMarkerOptions(location);
-      const box = getLabelScreenBox(location, labelConfig, selected);
-      return {
-        location,
-        meta: eraMeta[location.palette],
-        selected,
-        muted,
-        labelConfig,
-        box,
-        priority: getLabelPriority(location, selected, route)
-      };
-    })
-    .filter((candidate) => candidate.selected || isLabelBoxNearViewport(candidate.box))
-    .sort((a, b) => {
-      if (b.priority !== a.priority) return b.priority - a.priority;
-      return a.box.top - b.box.top;
-    });
-
-  const gap = getLabelCollisionGap();
-  const acceptedBoxes = [];
-  return candidates.filter((candidate) => {
-    const paddedBox = expandBox(candidate.box, gap);
-    const overlaps = acceptedBoxes.some((box) => boxesOverlap(paddedBox, box));
-    if (!candidate.selected && overlaps) return false;
-    acceptedBoxes.push(paddedBox);
-    return true;
-  });
-}
-
-function visibleRouteLocations(route, visibleLocations) {
-  const visibleIds = new Set(visibleLocations.map((location) => location.id));
-  return route.locations
-    .filter((id) => visibleIds.has(id))
-    .map((id) => getLocation(id))
-    .filter(Boolean);
-}
-
-function emptyFeatureCollection() {
-  return { type: "FeatureCollection", features: [] };
-}
-
-function clearDomMarkers() {
-  activePointMarkers.forEach((marker) => marker.remove());
-  activeLabelMarkers.forEach((marker) => marker.remove());
-  activePointMarkers = [];
-  activeLabelMarkers = [];
+  compassReset.style.setProperty("--compass-rotation", `${-map.getBearing()}deg`);
 }
 
 function textFieldMentionsName(value) {
@@ -879,14 +915,13 @@ function textFieldMentionsName(value) {
   return false;
 }
 
-function localizeBaseMapToSwedish() {
+function localizeBaseMapToEnglish() {
   if (!mapLoaded || !map) return;
   const style = map.getStyle();
   if (!style || !Array.isArray(style.layers)) return;
 
-  const swedishExpression = [
+  const englishExpression = [
     "coalesce",
-    ["get", "name:sv"],
     ["get", "name:en"],
     ["get", "name:latin"],
     ["get", "name_int"],
@@ -899,220 +934,216 @@ function localizeBaseMapToSwedish() {
     const textField = layer.layout && layer.layout["text-field"];
     if (!textFieldMentionsName(textField)) return;
     try {
-      map.setLayoutProperty(layer.id, "text-field", swedishExpression);
+      map.setLayoutProperty(layer.id, "text-field", englishExpression);
     } catch (error) {
-      // Ignore layers whose text expression cannot be overridden cleanly.
+      // Some vendor style layers do not accept late text-field changes.
     }
+  });
+}
+
+function ensurePlaceLayers() {
+  if (!mapLoaded || !map || map.getSource(SOURCE_ID)) return;
+
+  map.addSource(SOURCE_ID, {
+    type: "geojson",
+    data: featureCollection()
+  });
+
+  map.addLayer({
+    id: SELECTED_LAYER_ID,
+    type: "circle",
+    source: SOURCE_ID,
+    filter: ["==", ["get", "selected"], true],
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 7, 6, 14, 10, 24],
+      "circle-color": confidenceColorExpression(),
+      "circle-opacity": 0.2,
+      "circle-stroke-color": "#fff7e6",
+      "circle-stroke-width": 2
+    }
+  });
+
+  map.addLayer({
+    id: CIRCLE_LAYER_ID,
+    type: "circle",
+    source: SOURCE_ID,
+    paint: {
+      "circle-radius": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        2, ["case", ["==", ["get", "selected"], true], 5, 2.6],
+        6, ["case", ["==", ["get", "selected"], true], 8, 4.2],
+        10, ["case", ["==", ["get", "selected"], true], 13, 7]
+      ],
+      "circle-color": confidenceColorExpression(),
+      "circle-opacity": ["case", ["==", ["get", "muted"], true], 0.26, 0.84],
+      "circle-stroke-color": ["case", ["==", ["get", "selected"], true], "#fff7e6", "rgba(255,255,255,0.86)"],
+      "circle-stroke-width": ["case", ["==", ["get", "selected"], true], 2.4, 1.1]
+    }
+  });
+
+  map.addLayer({
+    id: LABEL_LAYER_ID,
+    type: "symbol",
+    source: SOURCE_ID,
+    minzoom: 3.2,
+    filter: [">=", ["get", "labelPriority"], 85],
+    layout: {
+      "text-field": ["get", "name"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 3, 10, 7, 12.5, 11, 15],
+      "text-offset": [0, 1.1],
+      "text-anchor": "top",
+      "text-optional": true,
+      "symbol-sort-key": ["get", "labelPriority"],
+      "text-allow-overlap": false,
+      "text-ignore-placement": false,
+      "text-font": ["Noto Sans Regular"]
+    },
+    paint: {
+      "text-color": "#1f2a26",
+      "text-halo-color": "rgba(255, 252, 246, 0.92)",
+      "text-halo-width": 1.6,
+      "text-opacity": ["case", ["==", ["get", "muted"], true], 0.42, 0.95]
+    }
+  });
+
+  map.on("click", CIRCLE_LAYER_ID, (event) => {
+    const feature = event.features?.[0];
+    if (!feature?.properties?.id) return;
+    state.selectedId = feature.properties.id;
+    renderAll();
+  });
+
+  map.on("click", SELECTED_LAYER_ID, (event) => {
+    const feature = event.features?.[0];
+    if (!feature?.properties?.id) return;
+    state.selectedId = feature.properties.id;
+    renderAll();
+  });
+
+  [CIRCLE_LAYER_ID, SELECTED_LAYER_ID].forEach((layerId) => {
+    map.on("mouseenter", layerId, () => {
+      map.getCanvas().style.cursor = "pointer";
+    });
+    map.on("mouseleave", layerId, () => {
+      map.getCanvas().style.cursor = "";
+    });
   });
 }
 
 function ensureRouteLayers() {
   if (!mapLoaded || !map) return;
-  if (!map.getSource("story-route-line")) {
-    map.addSource("story-route-line", {
+
+  if (!map.getSource(ROUTE_LINE_SOURCE_ID)) {
+    map.addSource(ROUTE_LINE_SOURCE_ID, {
       type: "geojson",
-      data: emptyFeatureCollection()
+      data: featureCollection()
     });
     map.addLayer({
       id: "story-route-line",
       type: "line",
-      source: "story-route-line",
+      source: ROUTE_LINE_SOURCE_ID,
       layout: {
         "line-cap": "round",
         "line-join": "round"
       },
       paint: {
         "line-color": ["get", "color"],
-        "line-width": 5,
-        "line-opacity": 0.88,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 3, 2.4, 7, 4.8],
+        "line-opacity": 0.78,
         "line-dasharray": [2.2, 2]
       }
-    });
+    }, SELECTED_LAYER_ID);
   }
 
-  if (!map.getSource("story-route-stops")) {
-    map.addSource("story-route-stops", {
+  if (!map.getSource(ROUTE_STOP_SOURCE_ID)) {
+    map.addSource(ROUTE_STOP_SOURCE_ID, {
       type: "geojson",
-      data: emptyFeatureCollection()
+      data: featureCollection()
     });
     map.addLayer({
       id: "story-route-stop-halo",
       type: "circle",
-      source: "story-route-stops",
+      source: ROUTE_STOP_SOURCE_ID,
       paint: {
-        "circle-radius": 7,
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 6, 8, 11],
         "circle-color": ["get", "color"],
         "circle-opacity": 0.2
       }
-    });
+    }, CIRCLE_LAYER_ID);
     map.addLayer({
       id: "story-route-stop-core",
       type: "circle",
-      source: "story-route-stops",
+      source: ROUTE_STOP_SOURCE_ID,
       paint: {
-        "circle-radius": 4,
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 3.2, 8, 5],
         "circle-color": ["get", "color"],
         "circle-stroke-color": "rgba(255,255,255,0.95)",
-        "circle-stroke-width": 2
+        "circle-stroke-width": 1.8
       }
-    });
+    }, CIRCLE_LAYER_ID);
   }
 }
 
-function updateRouteData(visibleLocations) {
+function visibleRoutePlaces(route, visiblePlaces) {
+  const visibleIds = new Set(visiblePlaces.map((place) => place.id));
+  return route.locations
+    .filter((id) => visibleIds.has(id))
+    .map((id) => placeById(id))
+    .filter(Boolean);
+}
+
+function updateRouteData(visiblePlaces) {
   if (!mapLoaded || !map) return;
   ensureRouteLayers();
 
+  const lineSource = map.getSource(ROUTE_LINE_SOURCE_ID);
+  const stopSource = map.getSource(ROUTE_STOP_SOURCE_ID);
   const route = getActiveRoute();
-  const lineSource = map.getSource("story-route-line");
-  const stopSource = map.getSource("story-route-stops");
   if (!lineSource || !stopSource) return;
 
   if (!route) {
-    lineSource.setData(emptyFeatureCollection());
-    stopSource.setData(emptyFeatureCollection());
+    lineSource.setData(featureCollection());
+    stopSource.setData(featureCollection());
     return;
   }
 
-  const routePoints = visibleRouteLocations(route, visibleLocations);
-  const meta = getRoutePalette(route);
-
-  lineSource.setData({
-    type: "FeatureCollection",
-    features: routePoints.length > 1 ? [{
-      type: "Feature",
-      properties: { color: meta.color },
-      geometry: {
-        type: "LineString",
-        coordinates: routePoints.map((location) => [location.lng, location.lat])
-      }
-    }] : []
-  });
-
-  stopSource.setData({
-    type: "FeatureCollection",
-    features: routePoints.map((location) => ({
-      type: "Feature",
-      properties: { color: meta.color },
-      geometry: {
-        type: "Point",
-        coordinates: [location.lng, location.lat]
-      }
-    }))
-  });
-}
-
-function buildPointMarker(location, meta, selected, muted) {
-  const element = document.createElement("div");
-  element.className = `bible-marker${selected ? " is-selected" : ""}${muted ? " is-muted" : ""}`;
-  element.style.setProperty("--marker-color", meta.color);
-  element.style.setProperty("--marker-soft", meta.soft);
-  element.innerHTML = `
-    <span class="bible-marker-halo" aria-hidden="true"></span>
-    <span class="bible-marker-core" aria-hidden="true"></span>
-    <button class="bible-marker-hit" type="button" aria-label="${escapeHtml(location.name)}"></button>
-  `;
-  element.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    state.selectedId = location.id;
-    renderAll();
-  });
-  return element;
-}
-
-function buildLabelMarker(location, meta, selected, muted) {
-  const element = document.createElement("button");
-  element.type = "button";
-  element.className = `bible-map-label${selected ? " is-selected" : ""}${muted ? " is-muted" : ""}`;
-  element.innerHTML = buildLabelHtml(location, meta);
-  element.setAttribute("aria-label", location.name);
-  element.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    state.selectedId = location.id;
-    renderAll();
-  });
-  return element;
-}
-
-function renderMap(visibleLocations) {
-  if (!mapLoaded || !map) return;
-
-  clearDomMarkers();
-  updateRouteData(visibleLocations);
-
-  const route = getActiveRoute();
-  const routeIds = new Set(route ? route.locations : []);
-
-  visibleLocations.forEach((location) => {
-    const meta = eraMeta[location.palette];
-    const selected = location.id === state.selectedId;
-    const muted = Boolean(route) && !routeIds.has(location.id);
-
-    const pointMarker = new maplibregl.Marker({
-      element: buildPointMarker(location, meta, selected, muted),
-      anchor: "center"
-    })
-      .setLngLat([location.lng, location.lat])
-      .addTo(map);
-    activePointMarkers.push(pointMarker);
-  });
-
-  getVisibleLabelCandidates(visibleLocations, route, routeIds).forEach((candidate) => {
-    const labelMarker = new maplibregl.Marker({
-      element: buildLabelMarker(candidate.location, candidate.meta, candidate.selected, candidate.muted),
-      anchor: candidate.labelConfig.anchor,
-      offset: candidate.labelConfig.offset
-    })
-      .setLngLat([candidate.location.lng, candidate.location.lat])
-      .addTo(map);
-    activeLabelMarkers.push(labelMarker);
-  });
-}
-
-function fitDefaultView(animated = false) {
-  if (!mapLoaded || !map) return;
-  map.fitBounds(INITIAL_MAP_BOUNDS, {
-    padding: 26,
-    duration: animated ? 700 : 0
-  });
-}
-
-function focusOnLocations(ids, animated = true) {
-  if (!mapLoaded || !map) return;
-  const points = ids.map((id) => getLocation(id)).filter(Boolean);
-  if (!points.length) return;
-
-  if (points.length === 1) {
-    const location = points[0];
-    map.easeTo({
-      center: [location.lng, location.lat],
-      zoom: location.focusZoom || 7,
-      duration: animated ? 700 : 0
-    });
-    return;
-  }
-
-  const bounds = points.reduce((accumulator, location) => {
-    if (!accumulator) {
-      return new maplibregl.LngLatBounds([location.lng, location.lat], [location.lng, location.lat]);
+  const routePlaces = visibleRoutePlaces(route, visiblePlaces);
+  lineSource.setData(featureCollection(routePlaces.length > 1 ? [{
+    type: "Feature",
+    properties: { color: route.color },
+    geometry: {
+      type: "LineString",
+      coordinates: routePlaces.map((place) => [place.lng, place.lat])
     }
-    accumulator.extend([location.lng, location.lat]);
-    return accumulator;
-  }, null);
+  }] : []));
 
-  map.fitBounds(bounds, {
-    padding: 44,
-    duration: animated ? 760 : 0
-  });
+  stopSource.setData(featureCollection(routePlaces.map((place) => ({
+    type: "Feature",
+    properties: { color: route.color },
+    geometry: {
+      type: "Point",
+      coordinates: [place.lng, place.lat]
+    }
+  }))));
 }
 
-function setMapFallback(message = "MapLibre eller vektorkartan kunde inte laddas.") {
+function renderMap(visiblePlaces) {
+  if (!mapLoaded || !map) return;
+  ensurePlaceLayers();
+  updateRouteData(visiblePlaces);
+
+  const source = map.getSource(SOURCE_ID);
+  if (!source) return;
+  source.setData(featureCollection(visiblePlaces.map(featureForPlace)));
+}
+
+function setMapFallback(message = "MapLibre or the vector basemap could not load.") {
   mapFallback.classList.add("is-visible");
   miniCard.innerHTML = `
-    <strong>Kartlager saknas</strong>
-    <span>${escapeHtml(message)} Öppna filen med internetanslutning för att få det realistiska baslagret.</span>
+    <strong>Map layer unavailable</strong>
+    <span>${escapeHtml(message)} Open the app with network access for the basemap.</span>
   `;
   [zoomIn, zoomOut, zoomHome].forEach((button) => {
     button.disabled = true;
@@ -1132,29 +1163,31 @@ function clearMapFallback() {
 
 function initializeMap() {
   fallbackTimer = window.setTimeout(() => {
-    if (!mapLoaded) {
-      setMapFallback("MapLibre-stilen svarade inte i tid.");
-    }
+    if (!mapLoaded) setMapFallback("The MapLibre style did not respond in time.");
   }, 6000);
 
   map = new maplibregl.Map({
     container: "maplibreMap",
     style: "https://tiles.openfreemap.org/styles/liberty",
-    bounds: INITIAL_MAP_BOUNDS,
-    fitBoundsOptions: { padding: 26, duration: 0 },
-    maxBounds: HARD_MAP_BOUNDS,
+    bounds: datasetBounds(),
+    fitBoundsOptions: { padding: 34, duration: 0 },
+    maxBounds: datasetBounds(3),
     dragRotate: true,
     pitchWithRotate: false,
     cooperativeGestures: true,
-    attributionControl: true
+    attributionControl: {
+      compact: true,
+      customAttribution: `<a href="${sourceMeta.sourceUrl}" target="_blank" rel="noreferrer">OpenBible.info Bible Geocoding Data</a> ${sourceMeta.license}`
+    }
   });
 
   map.on("load", () => {
     mapLoaded = true;
     window.clearTimeout(fallbackTimer);
     clearMapFallback();
+    ensurePlaceLayers();
     ensureRouteLayers();
-    localizeBaseMapToSwedish();
+    localizeBaseMapToEnglish();
     syncCompass();
     renderAll();
   });
@@ -1163,128 +1196,149 @@ function initializeMap() {
     if (mapLoaded) syncCompass();
   });
 
-  map.on("moveend", () => {
-    if (mapLoaded) renderMap(getVisibleLocations());
-  });
-
   map.on("error", (event) => {
     if (!mapLoaded && event && event.error) {
-      setMapFallback("MapLibre-stilen eller dess vektorresurser kunde inte laddas.");
+      setMapFallback("The MapLibre style or vector resources could not load.");
     }
   });
 
   window.addEventListener("resize", () => {
     if (!map) return;
     map.resize();
-    if (mapLoaded) renderMap(getVisibleLocations());
   });
 }
 
 function renderAll() {
-  const visibleLocations = getVisibleLocations();
-  normalizeSelection(visibleLocations);
-  const selectedLocation = getLocation(state.selectedId);
+  const visiblePlaces = getVisiblePlaces();
+  normalizeSelection(visiblePlaces);
+  const selectedPlace = placeById(state.selectedId);
   renderStaticControls();
-  renderActiveFilters(visibleLocations);
-  renderSummary(visibleLocations);
-  renderMiniCard(selectedLocation);
-  renderPlaceList(visibleLocations);
-  renderDetails(selectedLocation, visibleLocations);
-  renderMap(visibleLocations);
+  renderActiveFilters(visiblePlaces);
+  renderSummary(visiblePlaces);
+  renderMiniCard(selectedPlace);
+  renderPlaceList(visiblePlaces);
+  renderDetails(selectedPlace, visiblePlaces);
+  renderMap(visiblePlaces);
 }
 
-filterToggle.addEventListener("click", () => {
-  setDrawer("filters", openDrawer !== "filters");
-});
+function bindGlobalEvents() {
+  filterToggle.addEventListener("click", () => {
+    setDrawer("filters", openDrawer !== "filters");
+  });
+  filterClose.addEventListener("click", closeDrawers);
 
-filterClose.addEventListener("click", closeDrawers);
+  placesToggle.addEventListener("click", () => {
+    setDrawer("places", openDrawer !== "places");
+  });
+  placesClose.addEventListener("click", closeDrawers);
 
-placesToggle.addEventListener("click", () => {
-  setDrawer("places", openDrawer !== "places");
-});
+  aboutToggle.addEventListener("click", () => {
+    setDrawer("about", openDrawer !== "about");
+  });
+  aboutClose.addEventListener("click", closeDrawers);
 
-placesClose.addEventListener("click", closeDrawers);
-drawerScrim.addEventListener("click", closeDrawers);
+  drawerScrim.addEventListener("click", closeDrawers);
 
-document.addEventListener("click", (event) => {
-  if (openDrawer !== "places") return;
-  if (event.target instanceof Node && placesPanel.contains(event.target)) return;
-  event.preventDefault();
-  event.stopPropagation();
-  closeDrawers();
-}, true);
-
-document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape") return;
-  if (openDrawer) {
+  document.addEventListener("click", (event) => {
+    if (openDrawer !== "places") return;
+    if (event.target instanceof Node && placesPanel.contains(event.target)) return;
+    if (event.target instanceof Node && placesToggle.contains(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
     closeDrawers();
+  }, true);
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (openDrawer) {
+      closeDrawers();
+      return;
+    }
+    if (!routeMenu.hidden) closeRouteMenu(true);
+  });
+
+  zoomIn.addEventListener("click", () => {
+    if (!mapLoaded || !map) return;
+    map.zoomIn();
+  });
+
+  zoomOut.addEventListener("click", () => {
+    if (!mapLoaded || !map) return;
+    map.zoomOut();
+  });
+
+  compassReset.addEventListener("click", () => {
+    if (!mapLoaded || !map) return;
+    map.easeTo({ bearing: 0, pitch: 0, duration: 500 });
+    fitDefaultView(true);
+  });
+
+  zoomHome.addEventListener("click", () => fitDefaultView(true));
+
+  filterDone.addEventListener("click", closeDrawers);
+
+  clearFilters.addEventListener("click", () => {
+    state.testament = "all";
+    state.book = "all";
+    state.confidence = "all";
+    state.type = "all";
+    state.search = "";
+    searchInput.value = "";
+    renderAll();
+    fitDefaultView(true);
+  });
+
+  searchInput.addEventListener("input", () => {
+    state.search = searchInput.value;
+    renderAll();
+  });
+}
+
+function renderLoading() {
+  detailCard.innerHTML = `
+    <p class="section-label">Data</p>
+    <h2 class="detail-title">Loading places</h2>
+    <div class="empty-state">Loading the pinned OpenBible data snapshot.</div>
+  `;
+  miniCard.innerHTML = `
+    <strong>Loading data</strong>
+    <span>The map will render after the source-backed snapshot is ready.</span>
+  `;
+}
+
+async function loadOpenBibleData() {
+  const response = await fetch("/data/openbible-places.json");
+  if (!response.ok) {
+    throw new Error(`Could not load /data/openbible-places.json (${response.status})`);
+  }
+  const data = await response.json();
+  sourceMeta = data.source;
+  preparePlaces(data.places || []);
+  renderAbout();
+}
+
+async function boot() {
+  bindGlobalEvents();
+  renderLoading();
+
+  try {
+    await loadOpenBibleData();
+  } catch (error) {
+    detailCard.innerHTML = `
+      <p class="section-label">Data</p>
+      <h2 class="detail-title">Data unavailable</h2>
+      <div class="empty-state">${escapeHtml(error.message)}</div>
+    `;
+    setMapFallback("The OpenBible data snapshot could not load.");
     return;
   }
-  if (!routeMenu.hidden) closeRouteMenu(true);
-});
 
-zoomIn.addEventListener("click", () => {
-  if (!mapLoaded || !map) return;
-  map.zoomIn();
-});
-
-zoomOut.addEventListener("click", () => {
-  if (!mapLoaded || !map) return;
-  map.zoomOut();
-});
-
-compassReset.addEventListener("click", () => {
-  if (!mapLoaded || !map) return;
-  map.easeTo({
-    bearing: 0,
-    pitch: 0,
-    duration: 500
-  });
-});
-zoomHome.addEventListener("click", () => fitDefaultView(true));
-
-searchInput.addEventListener("input", (event) => {
-  state.search = event.target.value;
-  renderAll();
-});
-
-clearFilters.addEventListener("click", () => {
-  state.testament = "alla";
-  state.era = "alla";
-  state.book = "alla";
-  state.character = "alla";
-  state.search = "";
-  searchInput.value = "";
-  renderAll();
-});
-
-filterDone?.addEventListener("click", closeDrawers);
-
-mapStage.addEventListener("keydown", (event) => {
-  if (!mapLoaded || !map) return;
-  if (event.key === "+" || event.key === "=") {
-    event.preventDefault();
-    map.zoomIn();
-  } else if (event.key === "-" || event.key === "_") {
-    event.preventDefault();
-    map.zoomOut();
-  } else if (event.key === "Home") {
-    event.preventDefault();
-    fitDefaultView(true);
-  } else if (event.key === "ArrowLeft") {
-    event.preventDefault();
-    map.panBy([-80, 0], { duration: 0 });
-  } else if (event.key === "ArrowRight") {
-    event.preventDefault();
-    map.panBy([80, 0], { duration: 0 });
-  } else if (event.key === "ArrowUp") {
-    event.preventDefault();
-    map.panBy([0, -80], { duration: 0 });
-  } else if (event.key === "ArrowDown") {
-    event.preventDefault();
-    map.panBy([0, 80], { duration: 0 });
+  if (!placesById.has(state.selectedId)) {
+    state.selectedId = allPlaces[0]?.id || null;
   }
-});
 
-initializeMap();
-renderAll();
+  renderAll();
+  initializeMap();
+}
+
+boot();

@@ -6,7 +6,7 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+RUN npm run check
 
 FROM nginx:stable-alpine3.23-slim
 

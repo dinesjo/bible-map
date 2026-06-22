@@ -1,6 +1,10 @@
-# Bibellandskap
+# Bible Map
 
-Static Bible map app built with Vite and served in production by Nginx.
+Static, source-backed Bible geography app built with Vite, MapLibre, and a pinned OpenBible.info Bible Geocoding Data snapshot.
+
+The app is English-first. Place content comes from `public/data/openbible-places.json`, generated from OpenBible commit `7eb18a5ee62f27b9b93bd6689ea272d76dd23b8f` under CC BY 4.0. The generated browser data includes 1,309 coordinate-backed ancient places and records 33 unresolved OpenBible ancient entries in source metadata.
+
+See [NOTICE.md](./NOTICE.md) for third-party data attribution and change notes.
 
 ## Local Development
 
@@ -8,6 +12,16 @@ Static Bible map app built with Vite and served in production by Nginx.
 npm install
 npm run dev
 ```
+
+## Data Import
+
+Regenerate the committed OpenBible snapshot manually:
+
+```sh
+npm run import:openbible
+```
+
+CI does not fetch upstream data. `npm run check` validates the committed snapshot and then builds the app.
 
 ## Production Build
 

@@ -2,15 +2,18 @@
 
 ## Project State
 
-Bibellandskap is a Swedish, static Bible atlas app. It is already deployed as a quiet/live beta, but should be treated as late prototype to MVP-candidate until the public launch checklist is closed.
+Bible Map is an English-first, static Bible geography app. It is already deployed as a quiet/live beta, but should be treated as MVP-candidate until the public launch checklist is closed.
 
-The app is useful now: it has 32 curated places, 12 story routes, search, filters, responsive drawers, MapLibre markers/labels, Docker packaging, and a documented fact-audit trail.
+The app now uses a pinned OpenBible.info Bible Geocoding Data snapshot as the canonical place dataset: 1,309 coordinate-backed ancient places, 33 unresolved ancient records counted in metadata, source-backed confidence bands, searchable references, MapLibre layer-based markers/labels, 10 editorial routes, responsive drawers, Docker packaging, and deterministic CI validation.
 
 ## Stack
 
 - Vite static frontend, no backend.
 - Vanilla JavaScript in `src/app.js`.
-- Atlas data in `src/data/atlas-data.js`.
+- App constants, Bible book order, confidence metadata, and editorial routes in `src/data/atlas-data.js`.
+- Generated OpenBible browser data in `public/data/openbible-places.json`.
+- Manual OpenBible import script in `scripts/sync-openbible-data.mjs`, pinned to commit `7eb18a5ee62f27b9b93bd6689ea272d76dd23b8f`.
+- Third-party data attribution and transformation notes in `NOTICE.md`.
 - Styling in `src/styles.css`.
 - Map rendering through `maplibre-gl`.
 - Production image is built from `Dockerfile` and published by `.github/workflows/publish-container.yml` to `ghcr.io/dinesjo/bible-map`.
@@ -19,16 +22,17 @@ The app is useful now: it has 32 curated places, 12 story routes, search, filter
 
 - `npm install` installs dependencies.
 - `npm run dev` starts Vite for local development.
-- `npm run validate:data` checks atlas data references, routes, palettes, ids, and basic required fields.
+- `npm run import:openbible` manually regenerates `public/data/openbible-places.json` from the pinned OpenBible commit. This requires network access and is not run in CI.
+- `npm run validate:data` checks the committed generated snapshot, source metadata, exact expected counts, OpenBible URLs, confidence bands, coordinates, and route references.
 - `npm run build` creates the production static bundle in `dist/`.
-- `npm run check` runs data validation and the production build.
+- `npm run check` runs data validation and the production build. Docker builds also run this check before producing the Nginx image.
 - `docker compose up -d` runs the published container on port `8080`.
 
 ## Editing Guidelines
 
-- Keep UI and content copy Swedish unless the product direction changes.
-- When changing place data, update `src/data/atlas-data.js` and add supporting notes to `docs/fact-audit.md` for factual/geographic decisions.
-- Keep `location.id` values stable. Routes, anchor labels, and UI state depend on them.
+- Keep public UI and product copy English unless the product direction changes again.
+- Do not hand-edit generated place records in `public/data/openbible-places.json` except to review/import output. Change import behavior in `scripts/sync-openbible-data.mjs`, then rerun `npm run import:openbible`.
+- Keep OpenBible ancient ids stable. Editorial routes, default selection, and UI state depend on them.
 - New reference books must be added to `bookOrder` so filters and sorting remain coherent.
 - Do not commit `dist/`; it is generated and ignored.
 - Keep the app static unless there is a clear reason to add a backend.
@@ -41,6 +45,8 @@ The app is useful now: it has 32 curated places, 12 story routes, search, filter
 - No analytics/error monitoring, privacy text, or launch instrumentation.
 - The basemap depends on the public OpenFreeMap style and tile availability.
 - The JavaScript bundle is large because MapLibre is bundled into the app.
+- OpenBible data is a pinned 2021 baseline, not a live-updated feed.
+- Images, OSM-derived polygons/paths, and user contribution workflows are intentionally deferred.
 
 ## Launch Bar
 

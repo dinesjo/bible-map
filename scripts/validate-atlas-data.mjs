@@ -1,22 +1,27 @@
+import { readFile } from "node:fs/promises";
 import {
-  HARD_MAP_BOUNDS,
-  anchorLabelIds,
+  DEFAULT_SELECTED_PLACE_ID,
+  OPENBIBLE_LICENSE,
+  OPENBIBLE_SOURCE_COMMIT,
+  OPENBIBLE_SOURCE_NAME,
   bookOrder,
-  eraMeta,
-  featuredCharacters,
-  locations,
-  storyRoutes
+  confidenceMeta,
+  storyRoutes,
+  testamentMeta
 } from "../src/data/atlas-data.js";
 
+const DATA_PATH = "public/data/openbible-places.json";
+const EXPECTED_COUNTS = {
+  ancient: 1342,
+  resolved: 1309,
+  unresolved: 33
+};
+const EXPECTED_BOUNDS = [[-6.944167, 11.595], [67.4308, 44.94278]];
+const confidenceIds = new Set(Object.keys(confidenceMeta));
+const testamentIds = new Set(Object.keys(testamentMeta));
+const bookIds = new Set(bookOrder);
 const errors = [];
 const warnings = [];
-const locationIds = new Set();
-const eraIds = new Set(Object.keys(eraMeta));
-const bookIds = new Set(bookOrder);
-const testamentIds = new Set(["GT", "NT"]);
-const [minBounds, maxBounds] = HARD_MAP_BOUNDS;
-const [minLng, minLat] = minBounds;
-const [maxLng, maxLat] = maxBounds;
 
 function addError(message) {
   errors.push(message);
@@ -30,9 +35,17 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function validateStringArray(owner, field, values) {
-  if (!Array.isArray(values) || values.length === 0) {
-    addError(`${owner}: ${field} must be a non-empty array`);
+function isUrl(value, expectedPrefix = "https://") {
+  return isNonEmptyString(value) && value.startsWith(expectedPrefix);
+}
+
+function sameNumber(a, b) {
+  return Math.abs(a - b) < 0.000001;
+}
+
+function validateStringArray(owner, field, values, { allowEmpty = false } = {}) {
+  if (!Array.isArray(values) || (!allowEmpty && values.length === 0)) {
+    addError(`${owner}: ${field} must be ${allowEmpty ? "an array" : "a non-empty array"}`);
     return [];
   }
 
@@ -45,97 +58,166 @@ function validateStringArray(owner, field, values) {
   return values;
 }
 
-locations.forEach((location, index) => {
-  const owner = location.id || `locations[${index}]`;
-
-  if (!isNonEmptyString(location.id)) {
-    addError(`locations[${index}]: id is required`);
-  } else if (locationIds.has(location.id)) {
-    addError(`${owner}: duplicate location id`);
-  } else {
-    locationIds.add(location.id);
-  }
-
-  if (!isNonEmptyString(location.name)) addError(`${owner}: name is required`);
-  if (!isNonEmptyString(location.region)) addError(`${owner}: region is required`);
-  if (!isNonEmptyString(location.summary)) addError(`${owner}: summary is required`);
-  if (!isNonEmptyString(location.geography)) addError(`${owner}: geography is required`);
-
-  if (!Number.isFinite(location.lat) || !Number.isFinite(location.lng)) {
-    addError(`${owner}: lat/lng must be finite numbers`);
-  } else if (
-    location.lng < minLng
-    || location.lng > maxLng
-    || location.lat < minLat
-    || location.lat > maxLat
+function validateBounds(bounds) {
+  if (
+    !Array.isArray(bounds)
+    || bounds.length !== 2
+    || !Array.isArray(bounds[0])
+    || !Array.isArray(bounds[1])
+    || bounds[0].length !== 2
+    || bounds[1].length !== 2
   ) {
-    addWarning(`${owner}: coordinates are outside HARD_MAP_BOUNDS`);
-  }
-
-  if (!eraIds.has(location.palette)) addError(`${owner}: unknown palette "${location.palette}"`);
-
-  validateStringArray(owner, "testaments", location.testaments).forEach((testament) => {
-    if (!testamentIds.has(testament)) addError(`${owner}: unknown testament "${testament}"`);
-  });
-
-  validateStringArray(owner, "eras", location.eras).forEach((era) => {
-    if (!eraIds.has(era)) addError(`${owner}: unknown era "${era}"`);
-  });
-
-  validateStringArray(owner, "primaryBooks", location.primaryBooks).forEach((book) => {
-    if (!bookIds.has(book)) addError(`${owner}: primaryBooks includes "${book}" outside bookOrder`);
-  });
-
-  validateStringArray(owner, "characters", location.characters);
-
-  if (!Array.isArray(location.references) || location.references.length === 0) {
-    addError(`${owner}: references must be a non-empty array`);
-  } else {
-    location.references.forEach((reference, referenceIndex) => {
-      if (!isNonEmptyString(reference.book)) {
-        addError(`${owner}: references[${referenceIndex}].book is required`);
-      } else if (!bookIds.has(reference.book)) {
-        addError(`${owner}: references[${referenceIndex}] uses "${reference.book}" outside bookOrder`);
-      }
-
-      if (!isNonEmptyString(reference.passages)) {
-        addError(`${owner}: references[${referenceIndex}].passages is required`);
-      }
-    });
-  }
-});
-
-storyRoutes.forEach((route, index) => {
-  const owner = route.id || `storyRoutes[${index}]`;
-
-  if (!isNonEmptyString(route.id)) addError(`storyRoutes[${index}]: id is required`);
-  if (!isNonEmptyString(route.title)) addError(`${owner}: title is required`);
-  if (!isNonEmptyString(route.subtitle)) addError(`${owner}: subtitle is required`);
-  if (!isNonEmptyString(route.description)) addError(`${owner}: description is required`);
-  if (!eraIds.has(route.palette)) addError(`${owner}: unknown palette "${route.palette}"`);
-
-  validateStringArray(owner, "locations", route.locations).forEach((locationId) => {
-    if (!locationIds.has(locationId)) addError(`${owner}: unknown location "${locationId}"`);
-  });
-});
-
-anchorLabelIds.forEach((locationId) => {
-  if (!locationIds.has(locationId)) {
-    addError(`anchorLabelIds: unknown location "${locationId}"`);
-  }
-});
-
-featuredCharacters.forEach((character) => {
-  if (!isNonEmptyString(character.name)) {
-    addError("featuredCharacters: each entry needs a name");
+    addError("source.bounds must be [[minLng,minLat],[maxLng,maxLat]]");
     return;
   }
 
-  const appearsInLocations = locations.some((location) => location.characters.includes(character.name));
-  if (!appearsInLocations) {
-    addWarning(`featuredCharacters: "${character.name}" is not used by any location`);
+  bounds.flat().forEach((value, index) => {
+    if (!Number.isFinite(value)) addError(`source.bounds[flat ${index}] must be finite`);
+  });
+
+  EXPECTED_BOUNDS.flat().forEach((expected, index) => {
+    const actual = bounds.flat()[index];
+    if (!sameNumber(actual, expected)) {
+      addError(`source.bounds[flat ${index}] expected ${expected}, received ${actual}`);
+    }
+  });
+}
+
+function validateSource(source) {
+  if (!source || typeof source !== "object") {
+    addError("source is required");
+    return;
   }
-});
+
+  if (source.name !== OPENBIBLE_SOURCE_NAME) addError(`source.name must be "${OPENBIBLE_SOURCE_NAME}"`);
+  if (source.commit !== OPENBIBLE_SOURCE_COMMIT) addError(`source.commit must be "${OPENBIBLE_SOURCE_COMMIT}"`);
+  if (source.license !== OPENBIBLE_LICENSE) addError(`source.license must be "${OPENBIBLE_LICENSE}"`);
+  if (!isUrl(source.licenseUrl, "https://creativecommons.org/licenses/by/4.0/")) {
+    addError("source.licenseUrl must point to CC BY 4.0");
+  }
+  if (!isUrl(source.sourceUrl, "https://github.com/openbibleinfo/Bible-Geocoding-Data")) {
+    addError("source.sourceUrl must point to the OpenBible data repository");
+  }
+  if (!isNonEmptyString(source.generatedAt) || Number.isNaN(Date.parse(source.generatedAt))) {
+    addError("source.generatedAt must be an ISO date string");
+  }
+
+  Object.entries(EXPECTED_COUNTS).forEach(([key, expected]) => {
+    if (source.counts?.[key] !== expected) {
+      addError(`source.counts.${key} expected ${expected}, received ${source.counts?.[key]}`);
+    }
+  });
+
+  validateBounds(source.bounds);
+}
+
+function validatePlace(place, index, ids) {
+  const owner = place?.id || `places[${index}]`;
+
+  if (!place || typeof place !== "object") {
+    addError(`places[${index}] must be an object`);
+    return;
+  }
+
+  if (!isNonEmptyString(place.id)) {
+    addError(`places[${index}]: id is required`);
+  } else if (ids.has(place.id)) {
+    addError(`${owner}: duplicate id`);
+  } else {
+    ids.add(place.id);
+  }
+
+  if (!/^a[0-9a-f]{6}$/.test(place.id)) addError(`${owner}: id must be an OpenBible ancient id`);
+  if (place.openBibleAncientId !== place.id) addError(`${owner}: openBibleAncientId must match id`);
+  if (!isNonEmptyString(place.name)) addError(`${owner}: name is required`);
+  if (!isNonEmptyString(place.slug)) addError(`${owner}: slug is required`);
+  if (!Number.isFinite(place.lng) || !Number.isFinite(place.lat)) addError(`${owner}: lng/lat must be finite`);
+  if (!confidenceIds.has(place.confidence)) addError(`${owner}: unknown confidence "${place.confidence}"`);
+  if (!Number.isFinite(place.confidenceScore) && place.confidenceScore !== null) {
+    addError(`${owner}: confidenceScore must be finite or null`);
+  }
+  if (!Number.isInteger(place.verseCount) || place.verseCount < 0) addError(`${owner}: verseCount must be a non-negative integer`);
+  if (!Number.isInteger(place.sourceCount) || place.sourceCount < 0) addError(`${owner}: sourceCount must be a non-negative integer`);
+
+  validateStringArray(owner, "types", place.types, { allowEmpty: true });
+  validateStringArray(owner, "testaments", place.testaments, { allowEmpty: true }).forEach((testament) => {
+    if (!testamentIds.has(testament)) addError(`${owner}: unknown testament "${testament}"`);
+  });
+  validateStringArray(owner, "books", place.books, { allowEmpty: true }).forEach((book) => {
+    if (!bookIds.has(book)) addError(`${owner}: unknown book "${book}"`);
+  });
+
+  if (!Array.isArray(place.references)) {
+    addError(`${owner}: references must be an array`);
+  } else if (place.references.length !== place.verseCount) {
+    addError(`${owner}: references length must equal verseCount`);
+  }
+
+  if (!place.bestIdentification || typeof place.bestIdentification !== "object") {
+    addError(`${owner}: bestIdentification is required`);
+  } else {
+    const best = place.bestIdentification;
+    if (!confidenceIds.has(best.confidence)) addError(`${owner}: bestIdentification.confidence is invalid`);
+    if (!Number.isFinite(best.lng) || !Number.isFinite(best.lat)) addError(`${owner}: bestIdentification must include coordinates`);
+    if (!isNonEmptyString(best.description)) addError(`${owner}: bestIdentification.description is required`);
+    if (/[<>]/.test(best.description)) addError(`${owner}: bestIdentification.description must be plain text`);
+  }
+
+  if (!Array.isArray(place.alternatives)) {
+    addError(`${owner}: alternatives must be an array`);
+  } else {
+    place.alternatives.forEach((alternative, alternativeIndex) => {
+      if (!confidenceIds.has(alternative.confidence)) {
+        addError(`${owner}: alternatives[${alternativeIndex}].confidence is invalid`);
+      }
+      if (alternative.description && /[<>]/.test(alternative.description)) {
+        addError(`${owner}: alternatives[${alternativeIndex}].description must be plain text`);
+      }
+    });
+  }
+
+  if (!isUrl(place.links?.openBible, `https://www.openbible.info/geo/ancient/${place.id}/`)) {
+    addError(`${owner}: links.openBible is invalid`);
+  }
+  if (place.links?.wikidata && !isUrl(place.links.wikidata.url, "https://www.wikidata.org/wiki/Q")) {
+    addError(`${owner}: links.wikidata.url is invalid`);
+  }
+}
+
+function validateRoutes(placeIds) {
+  storyRoutes.forEach((route) => {
+    if (!isNonEmptyString(route.id)) addError("storyRoutes: every route needs an id");
+    if (!isNonEmptyString(route.title)) addError(`${route.id}: title is required`);
+    if (!isNonEmptyString(route.description)) addError(`${route.id}: description is required`);
+    validateStringArray(route.id, "locations", route.locations).forEach((placeId) => {
+      if (!placeIds.has(placeId)) addError(`${route.id}: unknown OpenBible place id "${placeId}"`);
+    });
+  });
+}
+
+const data = JSON.parse(await readFile(DATA_PATH, "utf8"));
+
+if (data.schemaVersion !== 1) addError("schemaVersion must be 1");
+validateSource(data.source);
+
+if (!Array.isArray(data.places)) {
+  addError("places must be an array");
+} else if (data.places.length !== EXPECTED_COUNTS.resolved) {
+  addError(`places length expected ${EXPECTED_COUNTS.resolved}, received ${data.places.length}`);
+}
+
+const placeIds = new Set();
+(data.places || []).forEach((place, index) => validatePlace(place, index, placeIds));
+
+if (!placeIds.has(DEFAULT_SELECTED_PLACE_ID)) {
+  addError(`DEFAULT_SELECTED_PLACE_ID "${DEFAULT_SELECTED_PLACE_ID}" is not present in generated data`);
+}
+
+validateRoutes(placeIds);
+
+const unknownBooks = [...new Set((data.places || []).flatMap((place) => place.books || []))]
+  .filter((book) => !bookIds.has(book));
+unknownBooks.forEach((book) => addWarning(`Book outside configured order: ${book}`));
 
 warnings.forEach((warning) => console.warn(`Warning: ${warning}`));
 
@@ -144,7 +226,6 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-const referenceCount = locations.reduce((total, location) => total + location.references.length, 0);
 console.log(
-  `Atlas data OK: ${locations.length} locations, ${storyRoutes.length} routes, ${referenceCount} reference groups.`
+  `OpenBible data OK: ${data.places.length} resolved places, ${storyRoutes.length} routes, source ${data.source.commit.slice(0, 7)}.`
 );

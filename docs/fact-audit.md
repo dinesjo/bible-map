@@ -1,8 +1,16 @@
 # Fact audit notes
 
-This file tracks external checks that affect `src/data/atlas-data.js`.
+This file tracks external checks that affect the app's biblical geography data.
 
-## Source baseline
+## Current source baseline
+
+- `public/data/openbible-places.json` is generated from OpenBible.info Bible Geocoding Data commit `7eb18a5ee62f27b9b93bd6689ea272d76dd23b8f`.
+- The generated v1 snapshot includes all coordinate-backed ancient places: 1,309 resolved records from 1,342 ancient records, with 33 unresolved records counted in metadata.
+- The app uses OpenBible's modern identifications, verse lists, source/vote signals, linked data, and confidence scores as the canonical place-data baseline.
+- The generated app data excludes thumbnails, raw KML/GeoJSON geometry, OSM-derived polygons/paths, and images in this version.
+- Attribution and license: OpenBible.info Bible Geocoding Data, CC BY 4.0.
+
+## Historical prototype baseline
 
 - OpenBible.info Bible Geocoding is used for biblical place references, possible identifications, confidence levels, and coordinate checks. It aggregates atlas/dictionary sources and links each place to verse lists and modern identifications.
 - UNESCO World Heritage pages are used as independent checks for official heritage-site descriptions and geography, including Saint Catherine/Sinai, Ancient Jericho/Tell es-Sultan, Biblical Tels/Beer Sheba, Tyre, Damascus, Babylon, Susa, and Ephesus.
