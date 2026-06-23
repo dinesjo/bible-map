@@ -436,7 +436,7 @@ function closeDrawers() {
 
 function getRouteOptions() {
   return [
-    { id: "", title: "Whole map", subtitle: `${allPlaces.length.toLocaleString("en-US")} source-backed places` },
+    { id: "", title: "Whole map", subtitle: `${allPlaces.length.toLocaleString("en-US")} mapped OpenBible places` },
     ...storyRoutes.map((route) => ({
       id: route.id,
       title: route.title,
@@ -781,10 +781,35 @@ function referenceSummaryForPlace(place) {
   };
 }
 
-function referenceMetaLine(place) {
+function bibleVerseReferenceLabel(count) {
+  return pluralize(count, "Bible verse reference");
+}
+
+function verseMetaLine(place) {
   const summary = referenceSummaryForPlace(place);
-  if (!summary.total) return "No direct references";
-  return `${pluralize(summary.bookCount, "book")} / ${pluralize(summary.total, "reference")}`;
+  if (!summary.total) return "No Bible verse references";
+  return `${bibleVerseReferenceLabel(summary.total)} in ${pluralize(summary.bookCount, "book")}`;
+}
+
+function openBibleScoreLine(place) {
+  const confidence = confidenceMeta[place.confidence]?.label || "Unknown";
+  if (!Number.isFinite(place.confidenceScore)) return `${confidence} confidence`;
+  return `${formatNumber(place.confidenceScore)} (${confidence} confidence)`;
+}
+
+function openBibleLocationRecordsLine(place) {
+  const count = Number.isFinite(place.sourceCount) ? place.sourceCount : 0;
+  return count
+    ? `${pluralize(count, "extra record")} explaining this location choice`
+    : "no extra records explaining this location choice";
+}
+
+function openBibleScoringVotesLine(place) {
+  if (!Number.isFinite(place.voteCount)) return "no scoring votes";
+  const voteText = pluralize(place.voteCount, "scoring vote");
+  return Number.isFinite(place.voteTotal)
+    ? `${voteText} with score total ${formatNumber(place.voteTotal)}`
+    : voteText;
 }
 
 function renderReferenceChip(reference) {
@@ -817,7 +842,7 @@ function renderTopBooks(place, limit = 5) {
 function renderReferencePreview(place) {
   const references = referenceDetailsForPlace(place);
   const summary = referenceSummaryForPlace(place);
-  if (!summary.total) return `<span class="empty-inline">No direct verse references in the imported record.</span>`;
+  if (!summary.total) return `<span class="empty-inline">No Bible verse references in this imported record.</span>`;
 
   if (summary.total <= 12) {
     return `<div class="reference-line detail-reference-list">${references.map(renderReferenceChip).join("")}</div>`;
@@ -828,11 +853,11 @@ function renderReferencePreview(place) {
       <div class="reference-preview">
         <div class="reference-callout">
           <div>
-            <strong>${pluralize(summary.total, "reference")} across ${pluralize(summary.bookCount, "book")}</strong>
-            <span>Open the reference explorer for the full list grouped by Testament, book, and chapter.</span>
+            <strong>${bibleVerseReferenceLabel(summary.total)} across ${pluralize(summary.bookCount, "book")}</strong>
+            <span>Open the Bible verse list grouped by Testament, book, and chapter.</span>
           </div>
           <button class="ghost-button is-active" type="button" data-detail-tab="references" aria-controls="detail-panel-references">
-            Open references
+            Open verse list
           </button>
         </div>
       </div>
@@ -851,11 +876,11 @@ function renderReferencePreview(place) {
       </div>
       <div class="reference-callout">
         <div>
-          <strong>${pluralize(summary.total, "reference")} across ${pluralize(summary.bookCount, "book")}</strong>
+          <strong>${bibleVerseReferenceLabel(summary.total)} across ${pluralize(summary.bookCount, "book")}</strong>
           <span>Explore the full list grouped by Testament, book, and chapter.</span>
         </div>
         <button class="ghost-button is-active" type="button" data-detail-tab="references" aria-controls="detail-panel-references">
-          Show all ${formatNumber(summary.total)} references
+          Show all ${formatNumber(summary.total)} verse references
         </button>
       </div>
     </div>
@@ -865,8 +890,8 @@ function renderReferencePreview(place) {
 function renderDetailTabs(activeTab) {
   const labels = {
     overview: "Overview",
-    references: "References",
-    evidence: "Evidence"
+    references: "Verses",
+    evidence: "Location"
   };
 
   return `
@@ -956,33 +981,33 @@ function renderReferenceResultContent(place) {
 
   if (!filtered.length) {
     return `
-      <p class="reference-result-count">No references match this search.</p>
-      <div class="empty-state">Try a book name, abbreviation, chapter, or reference such as “Genesis 12”.</div>
+      <p class="reference-result-count">No Bible verse references match this search.</p>
+      <div class="empty-state">Try a book name, abbreviation, chapter, or verse reference such as “Genesis 12”.</div>
     `;
   }
 
   const groups = groupReferenceResults(visible);
   return `
     <p class="reference-result-count">
-      Showing ${formatNumber(visible.length)} of ${formatNumber(filtered.length)} matching references.
+      Showing ${formatNumber(visible.length)} of ${formatNumber(filtered.length)} matching Bible verse references.
     </p>
     ${groups.map((testamentGroup) => `
       <section class="reference-testament-group">
         <h3>
-          ${escapeHtml(testamentMeta[testamentGroup.testament]?.label || "Other references")}
+          ${escapeHtml(testamentMeta[testamentGroup.testament]?.label || "Other verse references")}
           <span>${formatNumber(testamentGroup.count)}</span>
         </h3>
         ${testamentGroup.books.map((book, bookIndex) => `
           <details class="reference-book" ${search || bookIndex < 2 ? "open" : ""}>
             <summary>
               <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
-              <strong>${pluralize(book.count, "ref")}</strong>
+              <strong>${pluralize(book.count, "verse")}</strong>
             </summary>
             <div class="reference-chapter-stack">
               ${[...book.chapters.values()].map((chapter) => `
                 <div class="reference-chapter">
                   <span class="reference-chapter-label">
-                    ${Number.isInteger(chapter.chapter) ? `${escapeHtml(book.bookLabel || book.bookId)} ${chapter.chapter}` : "Other references"}
+                    ${Number.isInteger(chapter.chapter) ? `${escapeHtml(book.bookLabel || book.bookId)} ${chapter.chapter}` : "Other verse references"}
                   </span>
                   <div class="reference-chip-grid">
                     ${chapter.references.map(renderReferenceChip).join("")}
@@ -1023,7 +1048,7 @@ function renderDetails(place, visiblePlaces) {
     detailCard.innerHTML = `
       <p class="section-label">Selected place</p>
       <h2 class="detail-title">No match</h2>
-      <div class="empty-state">Adjust the filters or clear search to see source-backed places.</div>
+      <div class="empty-state">Adjust the filters or clear search to see mapped OpenBible places.</div>
     `;
     return;
   }
@@ -1044,20 +1069,23 @@ function renderDetails(place, visiblePlaces) {
   const alternatives = place.alternatives.length
     ? place.alternatives.map((alternative) => `
       <li>
-        <strong>${escapeHtml(alternative.name || alternative.description || "Alternative identification")}</strong>
+        <strong>${escapeHtml(alternative.name || alternative.description || "Other possible location")}</strong>
         <span>${escapeHtml(confidenceLabel(alternative.confidence))}${Number.isFinite(alternative.score) ? ` / score ${alternative.score}` : ""}</span>
       </li>
     `).join("")
-    : `<li><strong>No alternate identification in the imported record.</strong><span>OpenBible records this as a single best candidate.</span></li>`;
+    : `<li><strong>No other possible locations in the imported record.</strong><span>OpenBible records this as a single best candidate.</span></li>`;
   const wikidataLink = place.links.wikidata
     ? externalLinkMarkup(`Wikidata ${place.links.wikidata.id}`, place.links.wikidata.url, "detail-link")
     : "";
   const openBibleModernLink = modern?.url
-    ? externalLinkMarkup("Modern candidate", modern.url, "detail-link")
+    ? externalLinkMarkup("OpenBible modern location", modern.url, "detail-link")
     : "";
   const activeTab = detailTabs.includes(state.detailTab) ? state.detailTab : "overview";
   const oldTestamentCount = referenceSummary.oldTestamentCount || 0;
   const newTestamentCount = referenceSummary.newTestamentCount || 0;
+  const openBibleScore = openBibleScoreLine(place);
+  const openBibleLocationRecords = openBibleLocationRecordsLine(place);
+  const openBibleScoringVotes = openBibleScoringVotesLine(place);
   const compactReferences = window.matchMedia("(max-width: 760px)").matches;
   const distributionOpen = referenceSummary.total && !compactReferences ? "open" : "";
   const currentIndex = visiblePlaces.findIndex((item) => item.id === place.id);
@@ -1078,12 +1106,12 @@ function renderDetails(place, visiblePlaces) {
       ${routeNote}
     </div>
     <p class="detail-summary">
-      OpenBible resolves this biblical place to <strong>${escapeHtml(candidateText)}</strong>.
+      OpenBible maps this biblical place to <strong>${escapeHtml(candidateText)}</strong>.
       The confidence band is <strong>${escapeHtml(confidenceLabel(place.confidence))}</strong>.
     </p>
     <div class="detail-actions">
       <button class="ghost-button is-active" id="detailFocusButton" type="button">Show on map</button>
-      ${externalLinkMarkup("OpenBible record", place.links.openBible, "ghost-button detail-action-link")}
+      ${externalLinkMarkup("OpenBible place record", place.links.openBible, "ghost-button detail-action-link")}
     </div>
     <nav class="visible-place-nav" aria-label="Browse visible places">
       <button
@@ -1126,8 +1154,8 @@ function renderDetails(place, visiblePlaces) {
           <strong>${escapeHtml(modernName)}</strong>
         </div>
         <div class="detail-stat">
-          <span>References</span>
-          <strong>${escapeHtml(referenceMetaLine(place))}</strong>
+          <span>Bible verses</span>
+          <strong>${escapeHtml(verseMetaLine(place))}</strong>
         </div>
         <div class="detail-stat">
           <span>Testament</span>
@@ -1139,12 +1167,12 @@ function renderDetails(place, visiblePlaces) {
         ${renderTopBooks(place, 5)}
         ${referenceSummary.total ? `
           <button class="ghost-button compact-action" type="button" data-detail-tab="references" aria-controls="detail-panel-references">
-            View all references
+            View verse list
           </button>
         ` : ""}
       </section>
       <section class="detail-section">
-        <h3>References</h3>
+        <h3>Bible verse references</h3>
         ${renderReferencePreview(place)}
       </section>
     </section>
@@ -1156,24 +1184,25 @@ function renderDetails(place, visiblePlaces) {
       ${activeTab === "references" ? "" : "hidden"}
     >
       <div class="reference-dashboard">
-        <div class="reference-summary-strip" aria-label="Reference summary">
-          <span><strong>${formatNumber(referenceSummary.total)}</strong><small>refs</small></span>
+        <div class="reference-summary-strip" aria-label="Bible verse summary">
+          <span><strong>${formatNumber(referenceSummary.total)}</strong><small>verses</small></span>
           <span><strong>${formatNumber(referenceSummary.bookCount)}</strong><small>books</small></span>
           <span><strong>${formatNumber(oldTestamentCount)}</strong><small>OT</small></span>
           <span><strong>${formatNumber(newTestamentCount)}</strong><small>NT</small></span>
         </div>
         <label class="reference-search" for="referenceSearchInput">
-          <span>Search this place</span>
+          <span>Search this place's verses</span>
           <input
             id="referenceSearchInput"
             type="search"
             value="${escapeHtml(state.referenceSearch)}"
-            placeholder="Book, chapter, or reference"
+            placeholder="Book, chapter, or verse"
           >
         </label>
+        <p class="detail-note reference-help">This list shows Bible verse references only; it does not include full Bible text.</p>
       </div>
       <section class="detail-section reference-results-section">
-        <h3>Reference explorer</h3>
+        <h3>Bible verse list</h3>
         <div class="reference-results" id="referenceResults">${renderReferenceResultContent(place)}</div>
       </section>
       <details class="detail-section reference-book-distribution" ${distributionOpen}>
@@ -1193,12 +1222,12 @@ function renderDetails(place, visiblePlaces) {
     >
       <div class="detail-meta-grid">
         <div class="detail-stat">
-          <span>Sources / votes</span>
-          <strong>${place.sourceCount.toLocaleString("en-US")} sources / ${place.voteCount ?? "n/a"} votes</strong>
+          <span>Modern location</span>
+          <strong>${escapeHtml(modernName)}</strong>
         </div>
         <div class="detail-stat">
-          <span>Vote total</span>
-          <strong>${place.voteTotal ?? "n/a"}</strong>
+          <span>OpenBible score</span>
+          <strong>${escapeHtml(openBibleScore)}</strong>
         </div>
         <div class="detail-stat">
           <span>Coordinates</span>
@@ -1210,7 +1239,7 @@ function renderDetails(place, visiblePlaces) {
         </div>
       </div>
       <section class="detail-section">
-        <h3>Identification</h3>
+        <h3>Current map location</h3>
         <p class="detail-note">${escapeHtml(candidateText)}</p>
         <div class="detail-chip-row">
           ${place.types.map((type) => `<span class="small-chip">${escapeHtml(typeLabel(type))}</span>`).join("")}
@@ -1218,8 +1247,15 @@ function renderDetails(place, visiblePlaces) {
         </div>
       </section>
       <section class="detail-section">
-        <h3>Alternative identifications</h3>
+        <h3>Other possible locations</h3>
         <ul class="alternative-list">${alternatives}</ul>
+      </section>
+      <section class="detail-section">
+        <h3>How OpenBible scored this location</h3>
+        <p class="detail-note">
+          OpenBible lists ${escapeHtml(openBibleLocationRecords)}. It also lists ${escapeHtml(openBibleScoringVotes)}.
+          These imported numbers are OpenBible geocoding details, not Bible Map user votes or Bible verse counts.
+        </p>
       </section>
       ${relatedRoutes.length ? `
         <section class="detail-section">
@@ -1228,13 +1264,13 @@ function renderDetails(place, visiblePlaces) {
         </section>
       ` : ""}
       <section class="detail-section">
-        <h3>Source links</h3>
+        <h3>External records</h3>
         <div class="source-link-row">
-          ${externalLinkMarkup("Ancient place", place.links.openBible, "detail-link")}
+          ${externalLinkMarkup("OpenBible ancient place", place.links.openBible, "detail-link")}
           ${openBibleModernLink}
           ${wikidataLink}
         </div>
-        <p class="detail-source-note">Imported from OpenBible.info Bible Geocoding Data, ${escapeHtml(sourceMeta.license)}. Markup has been stripped and the record has been reshaped for this app.</p>
+        <p class="detail-source-note">Place data imported from OpenBible.info Bible Geocoding Data, ${escapeHtml(sourceMeta.license)}. Markup has been stripped and the record has been reshaped for this app.</p>
       </section>
     </section>
   `;
@@ -1290,7 +1326,7 @@ function renderPlaceList(visiblePlaces) {
         <small>${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")}</small>
         <strong>${escapeHtml(place.name)}</strong>
       </div>
-      <span class="place-books">${escapeHtml(place.books.slice(0, 3).join(" / ") || `${place.verseCount} refs`)}</span>
+      <span class="place-books">${escapeHtml(place.books.slice(0, 3).join(" / ") || pluralize(place.verseCount, "verse"))}</span>
     </button>
   `).join("");
 
@@ -1339,7 +1375,7 @@ function renderMiniCard(place) {
     <span class="mini-card-copy">
       <strong>${escapeHtml(place.name)}</strong>
       <span class="mini-card-meta">
-        ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence · ${pluralize(summary.bookCount, "book")} · ${pluralize(summary.total, "ref")}
+        ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence · ${pluralize(summary.bookCount, "book")} · ${pluralize(summary.total, "verse")}
       </span>
       <span>${escapeHtml(modernName)}</span>
       ${routeNote}
@@ -1798,7 +1834,7 @@ function renderLoading() {
   miniCard.setAttribute("aria-label", "Loading data");
   miniCard.innerHTML = `
     <strong>Loading data</strong>
-    <span>The map will render after the source-backed snapshot is ready.</span>
+    <span>The map will render after the OpenBible place data is ready.</span>
   `;
 }
 

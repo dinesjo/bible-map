@@ -9,7 +9,7 @@
   <link rel="preload" href="/fonts/Newsreader-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/fonts/SourceSans3-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/src/styles.css">
-  <title>Bible Map | Source-backed biblical geography</title>
+  <title>Bible Map | OpenBible biblical geography</title>
 </head>
 <body>
   <main class="page">
@@ -38,8 +38,8 @@
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M10.5 3.5a7 7 0 1 1 0 14a7 7 0 0 1 0-14Zm0 2a5 5 0 1 0 0 10a5 5 0 0 0 0-10Zm8.9 11.48l1.42 1.42l-2.12 2.12l-1.42-1.42z"/>
         </svg>
-        <span class="sr-only">Search place, book, reference, or modern location</span>
-        <input id="searchInput" type="search" placeholder="Search place, book, reference, or modern location">
+        <span class="sr-only">Search place, book, verse, or modern location</span>
+        <input id="searchInput" type="search" placeholder="Search place, book, verse, or modern location">
       </label>
 
       <nav class="atlas-actions" aria-label="Atlas tools">
@@ -48,7 +48,7 @@
           <strong id="activeFilterCount">0</strong>
         </button>
         <button class="tool-button source-button" id="aboutToggle" type="button" aria-expanded="false" aria-controls="aboutPanel">
-          <span>Sources</span>
+          <span>Data source</span>
         </button>
       </nav>
     </header>
@@ -163,9 +163,9 @@
         <div class="drawer-head">
           <div>
             <p class="section-label">Data and license</p>
-            <h2 class="drawer-title" id="aboutTitle">Sources</h2>
+            <h2 class="drawer-title" id="aboutTitle">About the data</h2>
           </div>
-          <button class="icon-button" id="aboutClose" type="button" aria-label="Close sources">×</button>
+          <button class="icon-button" id="aboutClose" type="button" aria-label="Close data source information">×</button>
         </div>
         <div class="about-content" id="aboutContent"></div>
       </aside>
