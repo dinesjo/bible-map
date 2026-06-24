@@ -16,7 +16,7 @@
     <header class="atlas-bar glass">
       <a class="skip-link" href="#mapStage">Skip to map</a>
       <div class="brand-block">
-        <p class="eyebrow">OpenBible data • Atlas</p>
+        <p class="eyebrow">OpenBible snapshot</p>
         <h1>Bible Map</h1>
       </div>
 
@@ -29,20 +29,20 @@
           aria-expanded="false"
           aria-controls="routeMenu"
         >
-          <span id="routePickerText">Whole map</span>
+          <span id="routePickerText">All places</span>
         </button>
-        <div class="route-menu" id="routeMenu" role="listbox" aria-label="Choose editorial route" hidden></div>
+        <div class="route-menu" id="routeMenu" role="listbox" aria-label="Choose route guide" hidden></div>
       </div>
 
       <label class="search-shell" for="searchInput">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M10.5 3.5a7 7 0 1 1 0 14a7 7 0 0 1 0-14Zm0 2a5 5 0 1 0 0 10a5 5 0 0 0 0-10Zm8.9 11.48l1.42 1.42l-2.12 2.12l-1.42-1.42z"/>
         </svg>
-        <span class="sr-only">Search place, book, verse, or modern location</span>
-        <input id="searchInput" type="search" placeholder="Search place, book, verse, or modern location">
+        <span class="sr-only">Search places, books, references, or modern locations</span>
+        <input id="searchInput" type="search" placeholder="Search places, books, references, or modern locations">
       </label>
 
-      <nav class="atlas-actions" aria-label="Atlas tools">
+      <nav class="atlas-actions" aria-label="Map tools">
         <button class="tool-button" id="filterToggle" type="button" aria-expanded="false" aria-controls="filterPanel">
           <span>Filters</span>
           <strong id="activeFilterCount">0</strong>
@@ -58,7 +58,7 @@
         <div class="map-strip">
           <div>
             <p class="section-label">Map</p>
-            <h2 id="mapTitle">Atlas</h2>
+            <h2 id="mapTitle">Map</h2>
           </div>
           <div class="active-row" id="activeFilters" aria-live="polite"></div>
         </div>
@@ -72,7 +72,7 @@
             </div>
           </div>
 
-          <button class="overlay compass" id="compassReset" type="button" aria-label="Reset map view">
+          <button class="overlay compass" id="compassReset" type="button" aria-label="Face north">
             <svg viewBox="0 0 40 40" aria-hidden="true">
               <circle cx="20" cy="20" r="18" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
               <path d="M20 3l4 12l-4 4l-4-4Z" fill="#f0d39a"/>
@@ -88,21 +88,21 @@
             <span>Select a place on the map.</span>
           </button>
 
-          <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Show place list" aria-expanded="false" aria-controls="placesPanel">
+          <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Open current place list" aria-expanded="false" aria-controls="placesPanel">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M7 6.25h10M7 12h10M7 17.75h10" />
               <circle cx="4.5" cy="6.25" r="1" />
               <circle cx="4.5" cy="12" r="1" />
               <circle cx="4.5" cy="17.75" r="1" />
             </svg>
-            <span class="sr-only">Places</span>
+            <span class="sr-only">Place list</span>
             <strong id="visibleCount">0</strong>
           </button>
 
           <aside class="overlay map-places-panel glass" id="placesPanel" role="dialog" aria-modal="false" aria-labelledby="placesTitle" aria-hidden="true">
             <div class="drawer-head">
               <div>
-                <p class="section-label">Visible places</p>
+                <p class="section-label">Current places</p>
                 <h2 class="drawer-title" id="placesTitle">Place list</h2>
               </div>
               <div class="drawer-head-actions">
@@ -116,7 +116,7 @@
           <div class="overlay zoom-controls">
             <button class="zoom-button" id="zoomIn" type="button" aria-label="Zoom in">+</button>
             <button class="zoom-button" id="zoomOut" type="button" aria-label="Zoom out">−</button>
-            <button class="zoom-button" id="zoomHome" type="button" aria-label="Show whole map">⌂</button>
+            <button class="zoom-button" id="zoomHome" type="button" aria-label="Fit all places">⌂</button>
           </div>
         </div>
       </section>
@@ -128,7 +128,7 @@
       <aside class="drawer-panel filter-panel glass" id="filterPanel" role="dialog" aria-modal="false" aria-labelledby="filterTitle" aria-hidden="true">
         <div class="drawer-head">
           <div>
-            <p class="section-label">Layers</p>
+            <p class="section-label">Filter places</p>
             <h2 class="drawer-title" id="filterTitle">Filters</h2>
           </div>
           <button class="icon-button" id="filterClose" type="button" aria-label="Close filters">×</button>
@@ -154,8 +154,8 @@
         </div>
 
         <div class="drawer-actions">
-          <button class="ghost-button" id="clearFilters" type="button">Clear</button>
-          <button class="ghost-button is-active" id="filterDone" type="button">Done</button>
+          <button class="ghost-button" id="clearFilters" type="button">Reset filters</button>
+          <button class="ghost-button" id="filterDone" type="button">Close filters</button>
         </div>
       </aside>
 
@@ -173,7 +173,7 @@
       <div class="drawer-scrim" id="drawerScrim" hidden></div>
     </section>
 
-    <p class="sr-only" id="summaryText">Choose a route to highlight an editorial path on the map.</p>
+    <p class="sr-only" id="summaryText">Choose a route guide to highlight a path on the map.</p>
   </main>
 
   <script type="module" src="/src/app.js"></script>
