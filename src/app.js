@@ -1,5 +1,6 @@
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { CupertinoPane } from "cupertino-pane";
 import {
   DEFAULT_SELECTED_PLACE_ID,
   FALLBACK_MAP_BOUNDS,
@@ -19,12 +20,16 @@ const state = {
   search: "",
   selectedId: DEFAULT_SELECTED_PLACE_ID,
   detailTab: "overview",
+  referenceBook: "all",
   referenceSearch: "",
-  referenceLimit: 160
+  referenceLimit: 160,
+  placeListLimit: 160,
+  placeSheet: "peek"
 };
 
 const SOURCE_ID = "openbible-places";
 const SELECTED_LAYER_ID = "openbible-place-selected";
+const ROUTE_MEMBER_LAYER_ID = "openbible-place-route-members";
 const CIRCLE_LAYER_ID = "openbible-place-circles";
 const LABEL_LAYER_ID = "openbible-place-labels";
 const ROUTE_LINE_SOURCE_ID = "story-route-line";
@@ -32,18 +37,45 @@ const ROUTE_STOP_SOURCE_ID = "story-route-stops";
 const confidenceOrder = ["high", "medium", "low", "unknown"];
 const detailTabs = ["overview", "references", "evidence"];
 const REFERENCE_PAGE_SIZE = 160;
+const PLACE_LIST_PAGE_SIZE = 160;
+const MOBILE_MEDIA_QUERY = "(max-width: 760px)";
+const sheetStates = ["peek", "half", "full"];
+const sheetBreakByState = { peek: "bottom", half: "middle", full: "top" };
+const sheetStateByBreak = { bottom: "peek", middle: "half", top: "full" };
+const SCROLL_EDGE_THRESHOLD = 3;
+const DISMISS_DRAG_ACTIVATION = 8;
+const DISMISS_DRAG_DISTANCE = 92;
+const DISMISS_DRAG_VELOCITY = 0.62;
+const TAB_SWIPE_ACTIVATION = 16;
+const TAB_SWIPE_DISTANCE = 64;
+const TAB_SWIPE_VERTICAL_CANCEL = 34;
+const MOBILE_SHEET_PEEK = 104;
+const scrollEdgeConfigs = [
+  { selector: ".filter-stack", axis: "y" },
+  { selector: ".book-row", axis: "y" },
+  { selector: ".character-grid", axis: "y" },
+  { selector: ".about-content", axis: "y" },
+  { selector: ".place-list", axis: "y" },
+  { selector: ".route-menu", axis: "y" },
+  { selector: ".reference-book-distribution .book-bars", axis: "y" },
+  { selector: ".reference-book-strip", axis: "x" },
+  { selector: ".detail-tabs", axis: "x" }
+];
 
 const routePicker = document.getElementById("routePicker");
 const routePickerButton = document.getElementById("routePickerButton");
 const routePickerText = document.getElementById("routePickerText");
 const routeMenu = document.getElementById("routeMenu");
+const routeMenuScrim = document.getElementById("routeMenuScrim");
 const testamentFilters = document.getElementById("testamentFilters");
 const confidenceFilters = document.getElementById("confidenceFilters");
 const bookFilters = document.getElementById("bookFilters");
 const typeFilters = document.getElementById("typeFilters");
 const detailCard = document.getElementById("detailCard");
 const placeList = document.getElementById("placeList");
+const searchForm = document.getElementById("searchForm");
 const searchInput = document.getElementById("searchInput");
+const searchClear = document.getElementById("searchClear");
 const summaryText = document.getElementById("summaryText");
 const visibleCount = document.getElementById("visibleCount");
 const activeFilterCount = document.getElementById("activeFilterCount");
@@ -63,12 +95,19 @@ const filterClose = document.getElementById("filterClose");
 const placesToggle = document.getElementById("placesToggle");
 const placesPanel = document.getElementById("placesPanel");
 const placesClose = document.getElementById("placesClose");
+const placesBackdrop = document.getElementById("placesBackdrop");
+const mapStage = document.querySelector(".map-stage");
 const aboutToggle = document.getElementById("aboutToggle");
 const aboutPanel = document.getElementById("aboutPanel");
 const aboutClose = document.getElementById("aboutClose");
 const aboutContent = document.getElementById("aboutContent");
 const drawerScrim = document.getElementById("drawerScrim");
 const inspectorPanel = document.getElementById("inspectorPanel");
+const inspectorPanelAnchor = document.createComment("inspector-panel-anchor");
+const mobilePlaceSummary = document.getElementById("mobilePlaceSummary");
+const mobilePlaceSummaryTitle = document.getElementById("mobilePlaceSummaryTitle");
+const mobilePlaceSummaryMeta = document.getElementById("mobilePlaceSummaryMeta");
+const mobilePlaceSummaryAction = document.getElementById("mobilePlaceSummaryAction");
 const sheetModalSiblings = [
   document.querySelector(".atlas-bar"),
   document.querySelector(".map-panel"),
@@ -76,6 +115,13 @@ const sheetModalSiblings = [
 ].filter(Boolean);
 const placesModalSiblings = [
   document.querySelector(".atlas-bar"),
+  inspectorPanel
+].filter(Boolean);
+const routeModalSiblings = [
+  document.querySelector(".brand-block"),
+  searchForm,
+  document.querySelector(".atlas-actions"),
+  document.querySelector(".map-panel"),
   inspectorPanel
 ].filter(Boolean);
 
@@ -89,6 +135,32 @@ let allPlaces = [];
 let placesById = new Map();
 let visiblePlacesCache = [];
 let detailPlaceId = null;
+let detailScrollPositions = new Map();
+let placeListRenderKey = "";
+let placeListObserver = null;
+let dismissDrag = null;
+let tabSwipe = null;
+let placeSheetPane = null;
+let placeSheetPanePromise = null;
+let viewportUpdateFrame = 0;
+let scrollEdgeResizeObserver = null;
+let overlayHistoryActive = false;
+let overlayHistoryReleasePending = false;
+let overlayHistorySyncPaused = false;
+let closingOverlayFromHistory = false;
+let suppressNextOverlayPop = false;
+const dragExcludedSelector = [
+  "a",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "summary",
+  "[role='button']",
+  "[contenteditable='true']"
+].join(",");
+
+inspectorPanel.before(inspectorPanelAnchor);
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -249,6 +321,7 @@ function getVisiblePlaces() {
 
 function normalizeSelection(visiblePlaces) {
   if (visiblePlaces.some((place) => place.id === state.selectedId)) return;
+  rememberDetailScroll();
 
   const route = getActiveRoute();
   if (route) {
@@ -270,6 +343,69 @@ function getActiveFilterTokens() {
   if (state.type !== "all") tokens.push(typeLabel(state.type));
   if (state.search.trim()) tokens.push(`"${state.search.trim()}"`);
   return tokens;
+}
+
+function syncSearchControls() {
+  if (searchInput.value !== state.search) searchInput.value = state.search;
+  searchClear.hidden = !state.search.trim();
+}
+
+function resetSearchAndFilters({ fitMap = false, focusSearch = false } = {}) {
+  state.testament = "all";
+  state.book = "all";
+  state.confidence = "all";
+  state.type = "all";
+  state.search = "";
+  renderAll();
+  if (fitMap) fitDefaultView(true);
+  if (focusSearch) searchInput.focus();
+}
+
+function revealMobileSearchResults() {
+  if (!isMobileLayout()) return;
+  setPlaceSheetState("peek", { animate: false });
+  setDrawer("places", true);
+}
+
+function submitSearch() {
+  state.search = searchInput.value;
+  renderAll();
+  searchInput.blur();
+
+  const visiblePlaces = visiblePlacesCache;
+  const query = state.search.trim();
+  if (!visiblePlaces.length) {
+    if (query) revealMobileSearchResults();
+    return;
+  }
+
+  if (visiblePlaces.length === 1) {
+    closeDrawers();
+    selectPlace(visiblePlaces[0].id, { focusMap: true, revealSheet: true });
+    return;
+  }
+
+  if (mapLoaded && map) {
+    focusOnLocations(visiblePlaces.map((place) => place.id), true);
+  }
+
+  if (query) revealMobileSearchResults();
+}
+
+function handleSearchFocus() {
+  if (!isMobileLayout()) return;
+
+  if (!routeMenu.hidden) closeRouteMenu(false);
+  if (openDrawer) closeDrawers();
+  if (state.placeSheet !== "peek") {
+    setPlaceSheetState("peek", { animate: false });
+  }
+
+  requestAnimationFrame(() => {
+    if (document.activeElement !== searchInput) {
+      searchInput.focus({ preventScroll: true });
+    }
+  });
 }
 
 function featureForPlace(place) {
@@ -297,6 +433,7 @@ function featureForPlace(place) {
       verseCount: place.verseCount,
       selected,
       inRoute,
+      routeColor: route?.color || "#405f7a",
       muted: Boolean(route && !inRoute),
       labelPriority
     },
@@ -331,11 +468,796 @@ function datasetBounds(withMargin = 0) {
   ];
 }
 
+function isMobileLayout() {
+  return window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function motionDuration(duration) {
+  return prefersReducedMotion() ? 0 : duration;
+}
+
+function scrollBehavior() {
+  return prefersReducedMotion() ? "auto" : "smooth";
+}
+
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
+function delay(ms = 0) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function afterFrameOrDelay() {
+  return Promise.race([nextFrame(), delay(50)]);
+}
+
+function promiseOrDelay(promise, ms = 320) {
+  return Promise.race([promise, delay(ms)]);
+}
+
+function blurActiveMobileControl() {
+  if (!isMobileLayout()) return false;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || active === document.body) return false;
+  if (!active.matches("input, textarea, select, [contenteditable='true']")) return false;
+  active.blur();
+  return true;
+}
+
+function blurActiveMobileControlIn(container) {
+  if (!isMobileLayout() || !container) return false;
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !container.contains(active)) return false;
+  return blurActiveMobileControl();
+}
+
+function currentViewportHeight() {
+  const viewport = window.visualViewport;
+  return viewport?.height || window.innerHeight;
+}
+
+function syncViewportMetrics() {
+  const height = currentViewportHeight();
+  document.documentElement.style.setProperty("--app-viewport-height", `${Math.round(height)}px`);
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function placeSheetMaxHeight() {
+  const viewportHeight = currentViewportHeight();
+  return Math.max(
+    MOBILE_SHEET_PEEK + 2,
+    Math.min(viewportHeight * 0.82, 720, Math.max(MOBILE_SHEET_PEEK + 2, viewportHeight - 72))
+  );
+}
+
+function capturePointer(element, pointerId) {
+  try {
+    element.setPointerCapture?.(pointerId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function releasePointer(element, pointerId) {
+  try {
+    element.releasePointerCapture?.(pointerId);
+  } catch {
+    // Pointer capture can be absent for synthetic or canceled pointer streams.
+  }
+}
+
+function placeSheetBreaks() {
+  const viewportHeight = currentViewportHeight();
+  const sheetHeight = placeSheetMaxHeight();
+  const peekHeight = Math.min(MOBILE_SHEET_PEEK, sheetHeight - 2);
+  const halfHeight = clamp(Math.max(viewportHeight * 0.54, 330), peekHeight + 1, sheetHeight - 1);
+
+  return {
+    top: { enabled: true, height: Math.round(sheetHeight) },
+    middle: { enabled: true, height: Math.round(halfHeight) },
+    bottom: { enabled: true, height: Math.round(peekHeight) }
+  };
+}
+
+function sheetBreakForState(sheetState = state.placeSheet) {
+  return sheetBreakByState[sheetState] || "bottom";
+}
+
+function sheetStateForBreak(breakName) {
+  return sheetStateByBreak[breakName] || "peek";
+}
+
+function placeSheetTransitionType(animate) {
+  return animate && !prefersReducedMotion() ? "breakpoint" : "move";
+}
+
+function placeSheetTargetTranslate(breakName) {
+  const visibleHeight = placeSheetBreaks()[breakName]?.height || 0;
+  return Math.round(currentViewportHeight() - visibleHeight);
+}
+
+function forcePlaceSheetBreak(breakName) {
+  if (!placeSheetPane?.paneEl) return;
+  const targetTranslate = placeSheetTargetTranslate(breakName);
+  if (!Number.isFinite(targetTranslate)) return;
+
+  placeSheetPane.currentTranslateY = targetTranslate;
+  if (placeSheetPane.transitions) placeSheetPane.transitions.isPaneHidden = false;
+  if (placeSheetPane.breakpoints) {
+    placeSheetPane.breakpoints.currentBreakpoint = targetTranslate;
+    placeSheetPane.breakpoints.prevBreakpoint = breakName;
+  }
+  const transform = placeSheetPane.buildTransform3d(
+    placeSheetPane.currentTranslateX || 0,
+    targetTranslate,
+    0
+  );
+  placeSheetPane.paneEl.style.setProperty("transition", "none", "important");
+  placeSheetPane.paneEl.style.setProperty("transform", transform, "important");
+  placeSheetPane.paneEl.getBoundingClientRect();
+}
+
+function scheduleForcedPlaceSheetBreak(breakName) {
+  forcePlaceSheetBreak(breakName);
+  [80, 260, 520].forEach((ms) => {
+    delay(ms).then(() => {
+      if (!isMobileLayout() || !placeSheetPane?.rendered) return;
+      if (sheetBreakForState(state.placeSheet) !== breakName) return;
+      forcePlaceSheetBreak(breakName);
+    });
+  });
+}
+
+async function movePlaceSheetToState(sheetState = state.placeSheet, { animate = false, force = false } = {}) {
+  if (!placeSheetPane?.rendered) return;
+  const targetBreak = sheetBreakForState(sheetState);
+  await promiseOrDelay(
+    placeSheetPane.moveToBreak(targetBreak, placeSheetTransitionType(animate)).catch(() => null),
+    animate ? motionDuration(240) + 120 : 80
+  );
+  await afterFrameOrDelay();
+  const currentTranslate = placeSheetPane.getPanelTransformY?.();
+  const targetTranslate = placeSheetTargetTranslate(targetBreak);
+  if (force || !Number.isFinite(currentTranslate) || Math.abs(Math.round(currentTranslate) - targetTranslate) > 1) {
+    scheduleForcedPlaceSheetBreak(targetBreak);
+  }
+}
+
+async function waitForPlaceSheetRender(pane) {
+  for (let attempt = 0; attempt < 5 && !pane?.rendered; attempt += 1) {
+    await delay(25);
+  }
+}
+
+function resetDetailScroll() {
+  detailCard.scrollTop = 0;
+  syncDetailScrollState();
+}
+
+function detailScrollKey(placeId = detailPlaceId, tab = state.detailTab) {
+  return placeId && detailTabs.includes(tab) ? `${placeId}:${tab}` : "";
+}
+
+function rememberDetailScroll(placeId = detailPlaceId, tab = state.detailTab) {
+  const key = detailScrollKey(placeId, tab);
+  if (!key) return;
+  detailScrollPositions.set(key, detailCard.scrollTop);
+}
+
+function restoreDetailScroll(placeId = detailPlaceId, tab = state.detailTab) {
+  const key = detailScrollKey(placeId, tab);
+  const savedScroll = key ? detailScrollPositions.get(key) : null;
+  if (!Number.isFinite(savedScroll)) return false;
+
+  requestAnimationFrame(() => {
+    const maxScroll = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
+    detailCard.scrollTop = clamp(savedScroll, 0, maxScroll);
+    syncDetailScrollState();
+  });
+  return true;
+}
+
+function anchorDetailTabsAfterRender() {
+  if (!isMobileLayout()) return;
+  const tabs = detailCard.querySelector(".detail-tabs");
+  if (!tabs) return;
+  const maxScroll = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
+  detailCard.scrollTop = clamp(tabs.offsetTop, 0, maxScroll);
+  syncDetailScrollState();
+}
+
+function keepFocusedDetailControlVisible(control) {
+  const alignControl = () => {
+    control.scrollIntoView({
+      block: "center",
+      inline: "nearest",
+      behavior: scrollBehavior()
+    });
+    syncDetailScrollState();
+  };
+
+  window.requestAnimationFrame(() => window.requestAnimationFrame(alignControl));
+  window.setTimeout(alignControl, 180);
+  window.setTimeout(alignControl, 360);
+}
+
+function handleDetailFocusIn(event) {
+  if (!isMobileLayout()) return;
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (!target.matches("input, textarea, select")) return;
+
+  if (openDrawer) closeDrawers();
+  if (state.placeSheet !== "full") setPlaceSheetState("full");
+  keepFocusedDetailControlVisible(target);
+}
+
+function syncScrollEdgeState(element) {
+  if (!element) return;
+  const axis = element.dataset.scrollAxis || "y";
+  const scrollPosition = axis === "x" ? element.scrollLeft : element.scrollTop;
+  const visibleSize = axis === "x" ? element.clientWidth : element.clientHeight;
+  const contentSize = axis === "x" ? element.scrollWidth : element.scrollHeight;
+  const maxScroll = Math.max(0, contentSize - visibleSize);
+  const isScrollable = maxScroll > SCROLL_EDGE_THRESHOLD;
+
+  element.classList.toggle("is-scrollable", isScrollable);
+  element.classList.toggle("can-scroll-before", isScrollable && scrollPosition > SCROLL_EDGE_THRESHOLD);
+  element.classList.toggle("can-scroll-after", isScrollable && scrollPosition < maxScroll - SCROLL_EDGE_THRESHOLD);
+}
+
+function revealActiveScrollItem(container) {
+  if (!container || container.dataset.scrollAxis !== "x") return;
+  const active = container.querySelector(".is-active, [aria-selected='true']");
+  if (!active) return;
+
+  const activeKey = active.getAttribute("data-reference-book")
+    || active.getAttribute("data-detail-tab")
+    || active.id
+    || active.textContent?.trim()
+    || "";
+  if (container.dataset.activeScrollKey === activeKey) return;
+  container.dataset.activeScrollKey = activeKey;
+
+  const maxScroll = Math.max(0, container.scrollWidth - container.clientWidth);
+  const targetLeft = clamp(active.offsetLeft - (container.clientWidth - active.offsetWidth) / 2, 0, maxScroll);
+  container.scrollTo({ left: targetLeft, behavior: scrollBehavior() });
+  requestAnimationFrame(() => syncScrollEdgeState(container));
+}
+
+function ensureScrollEdgeResizeObserver() {
+  if (scrollEdgeResizeObserver || !("ResizeObserver" in window)) return;
+  scrollEdgeResizeObserver = new ResizeObserver((entries) => {
+    entries.forEach((entry) => syncScrollEdgeState(entry.target));
+  });
+}
+
+function bindScrollEdgeContainers(root = document, { revealActive = false } = {}) {
+  ensureScrollEdgeResizeObserver();
+
+  scrollEdgeConfigs.forEach(({ selector, axis }) => {
+    const rootMatches = root instanceof Element && root.matches(selector) ? [root] : [];
+    const descendants = [...root.querySelectorAll(selector)];
+    [...rootMatches, ...descendants].forEach((element) => {
+      element.dataset.scrollAxis = axis;
+      element.classList.add("scroll-edge-container");
+
+      if (!element.dataset.scrollEdgeBound) {
+        element.dataset.scrollEdgeBound = "true";
+        element.addEventListener("scroll", () => syncScrollEdgeState(element), { passive: true });
+        scrollEdgeResizeObserver?.observe(element);
+      }
+
+      syncScrollEdgeState(element);
+      if (revealActive) revealActiveScrollItem(element);
+    });
+  });
+}
+
+function syncAllScrollEdgeStates() {
+  document.querySelectorAll(".scroll-edge-container").forEach(syncScrollEdgeState);
+}
+
+function syncDetailScrollState() {
+  const maxScroll = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
+  const canScroll = isMobileLayout() && state.placeSheet !== "peek" && maxScroll > SCROLL_EDGE_THRESHOLD;
+  const canScrollUp = canScroll && detailCard.scrollTop > SCROLL_EDGE_THRESHOLD;
+  const canScrollDown = canScroll && detailCard.scrollTop < maxScroll - SCROLL_EDGE_THRESHOLD;
+
+  inspectorPanel.classList.toggle("has-detail-scroll", canScroll);
+  inspectorPanel.classList.toggle("can-scroll-up", canScrollUp);
+  inspectorPanel.classList.toggle("can-scroll-down", canScrollDown);
+}
+
+function sheetVisibleHeight(sheetState = state.placeSheet) {
+  if (!isMobileLayout()) return 0;
+  const breakName = sheetBreakForState(sheetState);
+  return placeSheetBreaks()[breakName]?.height || 0;
+}
+
+function mapViewPadding() {
+  if (!isMobileLayout()) {
+    return { top: 44, right: 34, bottom: 34, left: 34 };
+  }
+
+  return {
+    top: 32,
+    right: 22,
+    bottom: Math.round(sheetVisibleHeight() + 22),
+    left: 22
+  };
+}
+
+function currentHistoryState() {
+  const historyState = window.history.state;
+  return historyState && typeof historyState === "object" ? historyState : {};
+}
+
+function isOverlayHistoryState() {
+  return Boolean(window.history.state?.bibleMapOverlay);
+}
+
+function hasDismissibleMobileOverlay() {
+  return isMobileLayout() && (Boolean(openDrawer) || !routeMenu.hidden || state.placeSheet !== "peek");
+}
+
+function runWithOverlayHistoryPaused(callback) {
+  const wasPaused = overlayHistorySyncPaused;
+  overlayHistorySyncPaused = true;
+  try {
+    callback();
+  } finally {
+    overlayHistorySyncPaused = wasPaused;
+  }
+}
+
+function ensureOverlayHistoryEntry() {
+  if (overlayHistoryActive || overlayHistoryReleasePending || !hasDismissibleMobileOverlay()) return;
+
+  try {
+    window.history.pushState({
+      ...currentHistoryState(),
+      bibleMapOverlay: true
+    }, "", window.location.href);
+    overlayHistoryActive = true;
+  } catch {
+    overlayHistoryActive = false;
+  }
+}
+
+function releaseOverlayHistoryEntry() {
+  if (!overlayHistoryActive || overlayHistoryReleasePending) return;
+
+  if (closingOverlayFromHistory) {
+    overlayHistoryActive = false;
+    overlayHistoryReleasePending = false;
+    return;
+  }
+
+  if (!isOverlayHistoryState()) {
+    overlayHistoryActive = false;
+    overlayHistoryReleasePending = false;
+    return;
+  }
+
+  suppressNextOverlayPop = true;
+  overlayHistoryReleasePending = true;
+  try {
+    window.history.back();
+  } catch {
+    suppressNextOverlayPop = false;
+    overlayHistoryActive = false;
+    overlayHistoryReleasePending = false;
+  }
+}
+
+function syncOverlayHistory() {
+  if (overlayHistorySyncPaused) return;
+
+  if (hasDismissibleMobileOverlay()) {
+    ensureOverlayHistoryEntry();
+    return;
+  }
+
+  releaseOverlayHistoryEntry();
+}
+
+function syncPlaceSheetSummaryState() {
+  mobilePlaceSummary.setAttribute("aria-expanded", String(state.placeSheet !== "peek"));
+  mobilePlaceSummary.setAttribute(
+    "aria-label",
+    state.placeSheet === "full" ? "Collapse selected place details" : "Expand selected place details"
+  );
+  mobilePlaceSummaryAction.textContent = state.placeSheet === "peek"
+    ? "Details"
+    : state.placeSheet === "half"
+      ? "More"
+      : "Map";
+}
+
+function restoreInspectorPanelPlacement() {
+  const parent = inspectorPanelAnchor.parentNode;
+  if (parent && inspectorPanel.parentNode !== parent) {
+    parent.insertBefore(inspectorPanel, inspectorPanelAnchor.nextSibling);
+  }
+  inspectorPanel.style.display = "";
+  inspectorPanel.style.height = "";
+  inspectorPanel.style.overflowX = "";
+  inspectorPanel.style.overflowY = "";
+  inspectorPanel.style.overscrollBehavior = "";
+}
+
+function syncPlaceSheetStateFromPane() {
+  if (!placeSheetPane?.rendered) return;
+  const currentBreak = placeSheetPane.currentBreak?.();
+  const nextState = sheetStateForBreak(currentBreak);
+  if (nextState === state.placeSheet) {
+    syncDetailScrollState();
+    return;
+  }
+
+  if (nextState === "peek") {
+    rememberDetailScroll();
+    blurActiveMobileControlIn(inspectorPanel);
+  }
+  state.placeSheet = nextState;
+  inspectorPanel.dataset.sheetState = nextState;
+  syncPlaceSheetSummaryState();
+  syncDetailScrollState();
+  if (mapLoaded && map) {
+    map.easeTo({ padding: mapViewPadding(), duration: motionDuration(180) });
+  }
+  syncOverlayHistory();
+}
+
+function updatePlaceSheetBreakpoints({ animate = false } = {}) {
+  if (!isMobileLayout() || !placeSheetPane?.rendered) return;
+  const breakpointUpdate = placeSheetPane.setBreakpoints(placeSheetBreaks()).catch(() => null);
+  promiseOrDelay(breakpointUpdate)
+    .then(() => movePlaceSheetToState(state.placeSheet, { animate, force: true }))
+    .then(syncPlaceSheetStateFromPane)
+    .catch(() => {});
+}
+
+function createPlaceSheetPane() {
+  return new CupertinoPane(inspectorPanel, {
+    parentElement: document.body,
+    cssClass: "bible-map-place-pane",
+    initialBreak: sheetBreakForState(),
+    breaks: placeSheetBreaks(),
+    buttonDestroy: false,
+    showDraggable: true,
+    draggableOver: true,
+    clickBottomOpen: false,
+    bottomClose: false,
+    fastSwipeClose: false,
+    lowerThanBottom: false,
+    backdrop: false,
+    dragBy: [".bible-map-place-pane .draggable", "#mobilePlaceSummary"],
+    animationDuration: motionDuration(240),
+    events: {
+      onDidPresent: syncPlaceSheetStateFromPane,
+      onDragEnd: syncPlaceSheetStateFromPane,
+      onTransitionEnd: syncPlaceSheetStateFromPane
+    }
+  });
+}
+
+function ensurePlaceSheetPane() {
+  if (!isMobileLayout()) return Promise.resolve(null);
+  if (placeSheetPane?.rendered) return Promise.resolve(placeSheetPane);
+  if (placeSheetPanePromise) return placeSheetPanePromise;
+
+  if (!placeSheetPane) placeSheetPane = createPlaceSheetPane();
+  const pane = placeSheetPane;
+  const presentation = pane.present({ animate: false }).catch(() => null);
+  placeSheetPanePromise = waitForPlaceSheetRender(pane)
+    .then(() => {
+      if (!pane.rendered) return null;
+      inspectorPanel.style.display = "";
+      inspectorPanel.dataset.sheetState = state.placeSheet;
+      return null;
+    })
+    .then(() => promiseOrDelay(presentation))
+    .then(() => {
+      if (!pane.rendered) return null;
+      return movePlaceSheetToState(state.placeSheet, { animate: false, force: true });
+    })
+    .then(() => {
+      if (!pane.rendered) return pane;
+      syncPlaceSheetStateFromPane();
+      return pane;
+    })
+    .finally(() => {
+      placeSheetPanePromise = null;
+    });
+  return placeSheetPanePromise;
+}
+
+function destroyPlaceSheetPane() {
+  if (!placeSheetPane?.rendered) {
+    placeSheetPane = null;
+    restoreInspectorPanelPlacement();
+    return Promise.resolve();
+  }
+
+  const pane = placeSheetPane;
+  placeSheetPane = null;
+  placeSheetPanePromise = null;
+  return pane.destroy({ animate: false })
+    .catch(() => {})
+    .then(restoreInspectorPanelPlacement);
+}
+
+function syncPlaceSheetPane() {
+  if (isMobileLayout()) {
+    ensurePlaceSheetPane().then(() => updatePlaceSheetBreakpoints({ animate: false }));
+    return;
+  }
+
+  destroyPlaceSheetPane();
+}
+
+function setPlaceSheetState(nextState, { updateMapPadding = true, animate = true } = {}) {
+  if (!sheetStates.includes(nextState)) return;
+  const previousState = state.placeSheet;
+  if (nextState === "peek") {
+    rememberDetailScroll();
+    blurActiveMobileControlIn(inspectorPanel);
+  }
+  state.placeSheet = nextState;
+  inspectorPanel.dataset.sheetState = nextState;
+  if (isMobileLayout()) {
+    ensurePlaceSheetPane()
+      .then(() => movePlaceSheetToState(nextState, { animate, force: true }))
+      .then(syncPlaceSheetStateFromPane)
+      .catch(() => {});
+    if (previousState === "peek" && nextState !== "peek") restoreDetailScroll();
+  } else {
+    destroyPlaceSheetPane();
+  }
+  syncPlaceSheetSummaryState();
+
+  if (updateMapPadding && mapLoaded && map) {
+    map.easeTo({ padding: mapViewPadding(), duration: motionDuration(220) });
+  }
+  syncDetailScrollState();
+  requestAnimationFrame(syncDetailScrollState);
+  syncOverlayHistory();
+}
+
+function cyclePlaceSheetState() {
+  const nextState = state.placeSheet === "peek"
+    ? "half"
+    : state.placeSheet === "half"
+      ? "full"
+      : "peek";
+  setPlaceSheetState(nextState);
+}
+
+function dismissPanelForKind(kind) {
+  if (kind === "filters") return filterPanel;
+  if (kind === "places") return placesPanel;
+  if (kind === "about") return aboutPanel;
+  if (kind === "route") return routeMenu;
+  return null;
+}
+
+function dismissScrollContainerForKind(kind) {
+  if (kind === "filters") return filterPanel.querySelector(".filter-stack");
+  if (kind === "places") return placeList;
+  if (kind === "about") return aboutContent;
+  if (kind === "route") return routeMenu;
+  return null;
+}
+
+function isDismissTargetOpen(kind) {
+  if (kind === "route") return !routeMenu.hidden;
+  return openDrawer === kind;
+}
+
+function closeDismissTarget(kind) {
+  if (kind === "route") {
+    closeRouteMenu(true);
+    return;
+  }
+
+  if (openDrawer === kind) closeDrawers();
+}
+
+function clearDismissDragStyles(panel) {
+  panel.classList.remove("is-dismiss-dragging");
+  panel.style.transform = "";
+  panel.style.opacity = "";
+}
+
+function beginDismissDrag(event, kind) {
+  if (!isMobileLayout() || dismissDrag || event.button > 0 || !isDismissTargetOpen(kind)) return;
+  const targetElement = event.target instanceof Element ? event.target : null;
+  const listRowDragTarget = targetElement?.closest(".place-row, .route-option");
+  const canDragInteractiveRow = (kind === "places" || kind === "route") && listRowDragTarget;
+  if (targetElement?.closest(dragExcludedSelector) && !canDragInteractiveRow) return;
+
+  const panel = dismissPanelForKind(kind);
+  const scrollContainer = dismissScrollContainerForKind(kind);
+  if (!panel) return;
+
+  const fromHeader = targetElement?.closest(".drawer-head");
+  const canStartFromContentTop = scrollContainer && scrollContainer.scrollTop <= 1;
+  if (!fromHeader && !canStartFromContentTop) return;
+
+  dismissDrag = {
+    kind,
+    panel,
+    pointerId: event.pointerId,
+    startY: event.clientY,
+    lastY: event.clientY,
+    lastTime: event.timeStamp,
+    currentOffset: 0,
+    velocity: 0,
+    active: false,
+    captured: false
+  };
+}
+
+function activateDismissDrag(event) {
+  if (!dismissDrag || dismissDrag.active) return Boolean(dismissDrag);
+
+  const deltaY = event.clientY - dismissDrag.startY;
+  if (deltaY < -DISMISS_DRAG_ACTIVATION) {
+    if (dismissDrag.captured) releasePointer(dismissDrag.panel, dismissDrag.pointerId);
+    dismissDrag = null;
+    return false;
+  }
+
+  if (deltaY < DISMISS_DRAG_ACTIVATION) return false;
+
+  dismissDrag.active = true;
+  dismissDrag.panel.classList.add("is-dismiss-dragging");
+  dismissDrag.captured = capturePointer(dismissDrag.panel, dismissDrag.pointerId);
+  return true;
+}
+
+function moveDismissDrag(event) {
+  if (!dismissDrag || event.pointerId !== dismissDrag.pointerId) return;
+  if (!activateDismissDrag(event)) return;
+
+  const deltaY = Math.max(0, event.clientY - dismissDrag.startY);
+  const timeDelta = Math.max(1, event.timeStamp - dismissDrag.lastTime);
+  dismissDrag.velocity = (event.clientY - dismissDrag.lastY) / timeDelta;
+  dismissDrag.lastY = event.clientY;
+  dismissDrag.lastTime = event.timeStamp;
+  dismissDrag.currentOffset = deltaY;
+  dismissDrag.panel.style.transform = `translate3d(0, ${Math.round(deltaY)}px, 0)`;
+  dismissDrag.panel.style.opacity = String(Math.max(0.62, 1 - deltaY / 420));
+  event.preventDefault();
+}
+
+function endDismissDrag(event) {
+  if (!dismissDrag || event.pointerId !== dismissDrag.pointerId) return;
+
+  const drag = dismissDrag;
+  const shouldDismiss = drag.active
+    && (drag.currentOffset >= DISMISS_DRAG_DISTANCE || drag.velocity >= DISMISS_DRAG_VELOCITY);
+  dismissDrag = null;
+
+  if (drag.captured) releasePointer(drag.panel, event.pointerId);
+  drag.panel.classList.remove("is-dismiss-dragging");
+
+  if (shouldDismiss) {
+    closeDismissTarget(drag.kind);
+    return;
+  }
+
+  clearDismissDragStyles(drag.panel);
+}
+
+function setDetailTab(tab, place = placeById(state.selectedId), visiblePlaces = visiblePlacesCache, { anchorOnMobile = true } = {}) {
+  if (!detailTabs.includes(tab) || !place) return false;
+  const previousTab = state.detailTab;
+  const changedTab = state.detailTab !== tab;
+  if (changedTab) rememberDetailScroll(place.id, previousTab);
+  state.detailTab = tab;
+  if (tab === "references" && state.referenceLimit < REFERENCE_PAGE_SIZE) {
+    state.referenceLimit = REFERENCE_PAGE_SIZE;
+  }
+  renderDetails(place, visiblePlaces);
+  if (changedTab && anchorOnMobile && isMobileLayout() && !restoreDetailScroll(place.id, tab)) {
+    requestAnimationFrame(anchorDetailTabsAfterRender);
+  }
+  return changedTab;
+}
+
+function switchDetailTabByOffset(direction) {
+  const place = placeById(state.selectedId);
+  if (!place) return false;
+  const activeTab = detailTabs.includes(state.detailTab) ? state.detailTab : "overview";
+  const activeIndex = detailTabs.indexOf(activeTab);
+  const nextIndex = clamp(activeIndex + direction, 0, detailTabs.length - 1);
+  if (nextIndex === activeIndex) return false;
+  return setDetailTab(detailTabs[nextIndex], place, visiblePlacesCache);
+}
+
+function clearDetailTabSwipe() {
+  tabSwipe = null;
+  detailCard.classList.remove("is-tab-swiping");
+  detailCard.style.removeProperty("--tab-swipe-offset");
+}
+
+function beginDetailTabSwipe(event) {
+  if (!isMobileLayout() || openDrawer || state.placeSheet === "peek" || event.button > 0 || tabSwipe) return;
+  if (event.target instanceof Element && event.target.closest(dragExcludedSelector)) return;
+  if (!placeById(state.selectedId)) return;
+
+  tabSwipe = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    currentDelta: 0,
+    active: false
+  };
+}
+
+function activateDetailTabSwipe(event) {
+  if (!tabSwipe || tabSwipe.active) return Boolean(tabSwipe);
+
+  const deltaX = event.clientX - tabSwipe.startX;
+  const deltaY = event.clientY - tabSwipe.startY;
+  const absX = Math.abs(deltaX);
+  const absY = Math.abs(deltaY);
+
+  if (absY > TAB_SWIPE_VERTICAL_CANCEL && absY > absX) {
+    clearDetailTabSwipe();
+    return false;
+  }
+
+  if (absX < TAB_SWIPE_ACTIVATION || absX < absY * 1.25) return false;
+
+  tabSwipe.active = true;
+  detailCard.classList.add("is-tab-swiping");
+  return true;
+}
+
+function moveDetailTabSwipe(event) {
+  if (!tabSwipe || event.pointerId !== tabSwipe.pointerId) return;
+  if (!activateDetailTabSwipe(event)) return;
+
+  const deltaX = event.clientX - tabSwipe.startX;
+  const activeTab = detailTabs.includes(state.detailTab) ? state.detailTab : "overview";
+  const activeIndex = detailTabs.indexOf(activeTab);
+  const hasPrevious = activeIndex > 0;
+  const hasNext = activeIndex < detailTabs.length - 1;
+  const hasTarget = deltaX > 0 ? hasPrevious : hasNext;
+  const dampedDelta = deltaX * (hasTarget ? 0.22 : 0.08);
+  tabSwipe.currentDelta = deltaX;
+  detailCard.style.setProperty("--tab-swipe-offset", `${Math.round(clamp(dampedDelta, -22, 22))}px`);
+  event.preventDefault();
+}
+
+function endDetailTabSwipe(event) {
+  if (!tabSwipe || event.pointerId !== tabSwipe.pointerId) return;
+
+  const deltaX = tabSwipe.currentDelta;
+  const shouldSwitch = tabSwipe.active && Math.abs(deltaX) >= TAB_SWIPE_DISTANCE;
+  const direction = deltaX < 0 ? 1 : -1;
+  clearDetailTabSwipe();
+  if (shouldSwitch) switchDetailTabByOffset(direction);
+}
+
 function fitDefaultView(animated = false) {
   if (!mapLoaded || !map) return;
   map.fitBounds(datasetBounds(), {
-    padding: { top: 44, right: 34, bottom: 34, left: 34 },
-    duration: animated ? 700 : 0
+    padding: mapViewPadding(),
+    duration: animated ? motionDuration(700) : 0
   });
 }
 
@@ -350,7 +1272,8 @@ function focusOnLocations(ids, animated = true) {
     map.easeTo({
       center: [place.lng, place.lat],
       zoom: broadType ? 5.4 : 7.5,
-      duration: animated ? 700 : 0
+      padding: mapViewPadding(),
+      duration: animated ? motionDuration(700) : 0
     });
     return;
   }
@@ -364,8 +1287,26 @@ function focusOnLocations(ids, animated = true) {
   }, null);
 
   map.fitBounds(bounds, {
-    padding: 56,
-    duration: animated ? 760 : 0
+    padding: mapViewPadding(),
+    duration: animated ? motionDuration(760) : 0
+  });
+}
+
+function centerPlaceFromDetails(placeId) {
+  if (isMobileLayout()) {
+    setPlaceSheetState("peek");
+    mapStage.focus({ preventScroll: true });
+  }
+  focusOnLocations([placeId], true);
+}
+
+function selectPlaceFromDetailNav(placeId, preferredFocusId) {
+  selectPlace(placeId, { focusMap: true });
+  requestAnimationFrame(() => {
+    const preferredTarget = document.getElementById(preferredFocusId);
+    const fallbackTarget = document.getElementById("detailFocusButton");
+    const focusTarget = preferredTarget && !preferredTarget.disabled ? preferredTarget : fallbackTarget;
+    focusTarget?.focus({ preventScroll: true });
   });
 }
 
@@ -373,23 +1314,66 @@ function revealSelectedDetails() {
   if (!placeById(state.selectedId) || !inspectorPanel) return;
   if (openDrawer) closeDrawers();
 
-  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (isMobileLayout()) {
+    setPlaceSheetState(state.placeSheet === "full" ? "peek" : "half");
+    window.setTimeout(() => inspectorPanel.focus({ preventScroll: true }), 120);
+    return;
+  }
+
   const targetTop = Math.max(0, inspectorPanel.getBoundingClientRect().top + window.scrollY - 8);
   window.scrollTo({
     top: targetTop,
-    behavior: prefersReducedMotion ? "auto" : "smooth"
+    behavior: scrollBehavior()
   });
-  requestAnimationFrame(() => {
+
+  const focusInspector = () => {
     inspectorPanel.focus({ preventScroll: true });
+  };
+  requestAnimationFrame(() => {
+    focusInspector();
+    window.setTimeout(() => {
+      if (document.activeElement !== inspectorPanel) focusInspector();
+    }, 80);
   });
 }
 
-function setOverlayInert(filtersOpen, placesOpen, aboutOpen) {
-  const elements = new Set([...sheetModalSiblings, ...placesModalSiblings]);
+function selectPlace(id, { focusMap = false, revealSheet = false } = {}) {
+  if (!id || !placesById.has(id)) return;
+  const changedPlace = state.selectedId !== id;
+  if (changedPlace) rememberDetailScroll();
+  const targetSheet = revealSheet && isMobileLayout()
+    ? (state.placeSheet === "full" ? "full" : "half")
+    : null;
+  state.selectedId = id;
+  renderAll();
+  if (changedPlace) resetDetailScroll();
+  if (targetSheet) setPlaceSheetState(targetSheet, { updateMapPadding: !focusMap });
+  if (focusMap) focusOnLocations([id], true);
+}
+
+function selectPlaceFromList(id) {
+  closeDrawers();
+  selectPlace(id, { focusMap: true, revealSheet: true });
+  if (isMobileLayout()) {
+    requestAnimationFrame(() => {
+      mobilePlaceSummary.focus({ preventScroll: true });
+    });
+  }
+}
+
+function syncOverlayInert() {
+  const filtersOpen = openDrawer === "filters";
+  const placesOpen = openDrawer === "places";
+  const aboutOpen = openDrawer === "about";
+  const routeOpen = isMobileLayout() && !routeMenu.hidden;
+  const elements = new Set([...sheetModalSiblings, ...placesModalSiblings, ...routeModalSiblings]);
+
   elements.forEach((element) => {
-    const inert = (filtersOpen || aboutOpen)
-      ? sheetModalSiblings.includes(element)
-      : placesOpen && placesModalSiblings.includes(element);
+    const inert = Boolean(
+      ((filtersOpen || aboutOpen) && sheetModalSiblings.includes(element))
+      || (placesOpen && placesModalSiblings.includes(element))
+      || (routeOpen && routeModalSiblings.includes(element))
+    );
 
     if (inert) {
       element.setAttribute("inert", "");
@@ -400,11 +1384,17 @@ function setOverlayInert(filtersOpen, placesOpen, aboutOpen) {
 }
 
 function setDrawer(name, open) {
-  if (open && !routeMenu.hidden) closeRouteMenu();
+  if (open && !routeMenu.hidden) {
+    runWithOverlayHistoryPaused(() => closeRouteMenu());
+  }
 
   const scrollLeft = window.scrollX;
   const scrollTop = window.scrollY;
   const wasOpen = Boolean(openDrawer);
+  const previousDrawer = openDrawer;
+  if (previousDrawer && (!open || previousDrawer !== name)) {
+    blurActiveMobileControlIn(dismissPanelForKind(previousDrawer));
+  }
   openDrawer = open ? name : null;
 
   const filtersOpen = openDrawer === "filters";
@@ -428,6 +1418,7 @@ function setDrawer(name, open) {
   document.body.classList.toggle("filters-open", filtersOpen);
   document.body.classList.toggle("places-open", placesOpen);
   document.body.classList.toggle("about-open", aboutOpen);
+  syncMobileDrawerStyles(filtersOpen, placesOpen, aboutOpen);
   filterPanel.setAttribute("aria-hidden", String(!filtersOpen));
   placesPanel.setAttribute("aria-hidden", String(!placesOpen));
   aboutPanel.setAttribute("aria-hidden", String(!aboutOpen));
@@ -439,23 +1430,71 @@ function setDrawer(name, open) {
   aboutToggle.setAttribute("aria-expanded", String(aboutOpen));
   drawerScrim.hidden = !(filtersOpen || aboutOpen);
 
-  setOverlayInert(filtersOpen, placesOpen, aboutOpen);
+  syncOverlayInert();
 
   if (filtersOpen) filterClose.focus({ preventScroll: true });
   if (placesOpen) placesClose.focus({ preventScroll: true });
   if (aboutOpen) aboutClose.focus({ preventScroll: true });
+  if (placesOpen) {
+    requestAnimationFrame(() => {
+      renderPlaceList(visiblePlacesCache);
+      revealSelectedPlaceInList({ force: true });
+    });
+  }
   if (hasOpenPanel) {
     window.scrollTo(scrollLeft, scrollTop);
     requestAnimationFrame(() => window.scrollTo(scrollLeft, scrollTop));
+    requestAnimationFrame(() => bindScrollEdgeContainers(document, { revealActive: true }));
   }
   if (!hasOpenPanel && drawerReturnFocus) {
     drawerReturnFocus.focus({ preventScroll: true });
     drawerReturnFocus = null;
   }
+  syncOverlayHistory();
+}
+
+function syncMobileDrawerStyles(filtersOpen, placesOpen, aboutOpen) {
+  const syncPanel = (panel, isOpen, { pinToBottom = false } = {}) => {
+    const properties = ["bottom", "opacity", "visibility", "pointerEvents", "transform", "transition"];
+    if (!isMobileLayout()) {
+      properties.forEach((property) => {
+        panel.style[property] = "";
+      });
+      return;
+    }
+
+    const suppressTransition = isOpen && document.hidden;
+    panel.style.transition = suppressTransition ? "none" : "";
+    panel.style.bottom = isOpen && pinToBottom ? "0px" : "";
+    panel.style.opacity = isOpen ? "1" : "";
+    panel.style.visibility = isOpen ? "visible" : "";
+    panel.style.pointerEvents = isOpen ? "auto" : "";
+    panel.style.transform = isOpen ? "translate3d(0, 0, 0)" : "";
+
+    if (suppressTransition) {
+      panel.getAnimations?.().forEach((animation) => animation.cancel());
+      window.setTimeout(() => {
+        if (panel.style.transform === "translate3d(0px, 0px, 0px)") panel.style.transition = "";
+      }, 0);
+    }
+  };
+
+  syncPanel(filterPanel, filtersOpen, { pinToBottom: true });
+  syncPanel(placesPanel, placesOpen);
+  syncPanel(aboutPanel, aboutOpen, { pinToBottom: true });
+
+  const showPlacesBackdrop = isMobileLayout() && placesOpen;
+  placesBackdrop.hidden = !showPlacesBackdrop;
+  placesBackdrop.style.opacity = showPlacesBackdrop ? "1" : "";
+  placesBackdrop.style.pointerEvents = showPlacesBackdrop ? "auto" : "";
 }
 
 function closeDrawers() {
+  const closingPlaces = openDrawer === "places";
   setDrawer(null, false);
+  if (closingPlaces && isMobileLayout()) {
+    setPlaceSheetState("peek", { updateMapPadding: false, animate: false });
+  }
 }
 
 function getRouteOptions() {
@@ -474,10 +1513,112 @@ function getCurrentRouteOption() {
 }
 
 function closeRouteMenu(restoreFocus = false) {
+  blurActiveMobileControlIn(routeMenu);
+  clearDismissDragStyles(routeMenu);
   routePicker.classList.remove("is-open");
+  document.body.classList.remove("route-menu-open");
   routePickerButton.setAttribute("aria-expanded", "false");
   routeMenu.hidden = true;
+  routeMenuScrim.hidden = true;
+  syncOverlayInert();
   if (restoreFocus) routePickerButton.focus();
+  syncOverlayHistory();
+}
+
+function closeTopMobileOverlay({ fromHistory = false } = {}) {
+  const wasClosingFromHistory = closingOverlayFromHistory;
+  closingOverlayFromHistory = fromHistory;
+
+  try {
+    if (openDrawer) {
+      closeDrawers();
+      return true;
+    }
+
+    if (!routeMenu.hidden) {
+      closeRouteMenu(true);
+      return true;
+    }
+
+    if (isMobileLayout() && state.placeSheet !== "peek") {
+      setPlaceSheetState("peek");
+      return true;
+    }
+
+    return false;
+  } finally {
+    closingOverlayFromHistory = wasClosingFromHistory;
+  }
+}
+
+function handleOverlayPopState() {
+  if (suppressNextOverlayPop) {
+    suppressNextOverlayPop = false;
+    overlayHistoryActive = false;
+    overlayHistoryReleasePending = false;
+    syncOverlayHistory();
+    return;
+  }
+
+  if (!overlayHistoryActive) return;
+  overlayHistoryActive = false;
+  overlayHistoryReleasePending = false;
+  closeTopMobileOverlay({ fromHistory: true });
+}
+
+function handleViewportChange() {
+  syncViewportMetrics();
+  syncPlaceSheetPane();
+  syncMapGestureMode();
+  syncAllScrollEdgeStates();
+
+  if (!routeMenu.hidden) {
+    routeMenuScrim.hidden = !isMobileLayout();
+    document.body.classList.toggle("route-menu-open", isMobileLayout());
+    syncOverlayInert();
+  }
+
+  if (!map) return;
+  map.resize();
+  if (mapLoaded) map.easeTo({ padding: mapViewPadding(), duration: 0 });
+}
+
+function scheduleViewportChange() {
+  if (viewportUpdateFrame) return;
+  viewportUpdateFrame = window.requestAnimationFrame(() => {
+    viewportUpdateFrame = 0;
+    handleViewportChange();
+  });
+}
+
+function syncMapGestureMode() {
+  if (!map?.cooperativeGestures) return;
+
+  try {
+    if (isMobileLayout()) {
+      map.cooperativeGestures.disable();
+    } else {
+      map.cooperativeGestures.enable();
+    }
+  } catch {
+    // Gesture mode updates are best-effort across MapLibre versions.
+  }
+}
+
+function revealRouteOption(option, { force = false } = {}) {
+  if (!option || routeMenu.hidden) return;
+
+  const menuRect = routeMenu.getBoundingClientRect();
+  const optionRect = option.getBoundingClientRect();
+  const isVisible = optionRect.top >= menuRect.top + 8 && optionRect.bottom <= menuRect.bottom - 8;
+  if (!force && isVisible) return;
+
+  option.scrollIntoView({
+    block: "nearest",
+    inline: "nearest",
+    behavior: scrollBehavior()
+  });
+  requestAnimationFrame(() => syncScrollEdgeState(routeMenu));
 }
 
 function focusRouteOption(option) {
@@ -486,13 +1627,25 @@ function focusRouteOption(option) {
     item.tabIndex = item === option ? 0 : -1;
   });
   option.focus();
+  revealRouteOption(option);
 }
 
 function openRouteMenu(focusSelected = false) {
-  if (openDrawer) closeDrawers();
-  routePicker.classList.add("is-open");
-  routePickerButton.setAttribute("aria-expanded", "true");
-  routeMenu.hidden = false;
+  runWithOverlayHistoryPaused(() => {
+    if (openDrawer) closeDrawers();
+    if (isMobileLayout()) setPlaceSheetState("peek");
+    routePicker.classList.add("is-open");
+    document.body.classList.add("route-menu-open");
+    routePickerButton.setAttribute("aria-expanded", "true");
+    routeMenu.hidden = false;
+    routeMenuScrim.hidden = !isMobileLayout();
+    syncOverlayInert();
+  });
+  syncOverlayHistory();
+  requestAnimationFrame(() => {
+    bindScrollEdgeContainers(routePicker, { revealActive: true });
+    revealRouteOption(routeMenu.querySelector("[aria-selected='true']"), { force: true });
+  });
 
   if (focusSelected) {
     const focusSelectedOption = () => {
@@ -506,7 +1659,7 @@ function openRouteMenu(focusSelected = false) {
 
 function toggleRouteMenu() {
   if (routeMenu.hidden) {
-    openRouteMenu(false);
+    openRouteMenu(isMobileLayout());
     return;
   }
   closeRouteMenu();
@@ -534,7 +1687,7 @@ function handleRouteSelection(routeId) {
 }
 
 function selectRouteOption(routeId) {
-  closeRouteMenu();
+  closeRouteMenu(true);
   closeDrawers();
   handleRouteSelection(routeId);
 }
@@ -633,6 +1786,24 @@ function renderRoutePicker() {
   bindRoutePicker();
 }
 
+function renderAfterFilterControlChange(container, dataKey, value) {
+  renderAll();
+  requestAnimationFrame(() => {
+    if (openDrawer !== "filters") return;
+    const target = [...container.querySelectorAll(`[data-${dataKey}]`)]
+      .find((button) => button.dataset[dataKey] === value);
+    if (!(target instanceof HTMLElement)) return;
+
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+      behavior: scrollBehavior()
+    });
+    bindScrollEdgeContainers(filterPanel, { revealActive: true });
+  });
+}
+
 function buildFilterChip(label, active, dataset, className = "toggle-chip", prefix = "") {
   return `<button class="${className}${active ? " is-active" : ""}" type="button" ${dataset}>${prefix}${escapeHtml(label)}</button>`;
 }
@@ -687,28 +1858,28 @@ function renderStaticControls() {
   testamentFilters.querySelectorAll("[data-testament]").forEach((button) => {
     button.addEventListener("click", () => {
       state.testament = button.dataset.testament;
-      renderAll();
+      renderAfterFilterControlChange(testamentFilters, "testament", state.testament);
     });
   });
 
   confidenceFilters.querySelectorAll("[data-confidence]").forEach((button) => {
     button.addEventListener("click", () => {
       state.confidence = button.dataset.confidence;
-      renderAll();
+      renderAfterFilterControlChange(confidenceFilters, "confidence", state.confidence);
     });
   });
 
   bookFilters.querySelectorAll("[data-book]").forEach((button) => {
     button.addEventListener("click", () => {
       state.book = button.dataset.book;
-      renderAll();
+      renderAfterFilterControlChange(bookFilters, "book", state.book);
     });
   });
 
   typeFilters.querySelectorAll("[data-type]").forEach((button) => {
     button.addEventListener("click", () => {
       state.type = button.dataset.type;
-      renderAll();
+      renderAfterFilterControlChange(typeFilters, "type", state.type);
     });
   });
 }
@@ -717,19 +1888,37 @@ function renderActiveFilters(visiblePlaces) {
   const tokens = getActiveFilterTokens();
   activeFilterCount.textContent = String(tokens.length);
   activeFilterCount.hidden = tokens.length === 0;
+  syncFilterDrawerActions(visiblePlaces, tokens);
+  syncSearchControls();
 
   if (!tokens.length) {
-    activeFilters.innerHTML = `<span class="status-pill">${visiblePlaces.length.toLocaleString("en-US")} places</span>`;
+    activeFilters.innerHTML = `
+      <span class="filter-summary-label">All mapped places</span>
+      <span class="status-pill">${visiblePlaces.length.toLocaleString("en-US")} places</span>
+    `;
     return;
   }
 
   const visibleTokens = tokens.slice(0, 3);
   const remainder = tokens.length - visibleTokens.length;
   activeFilters.innerHTML = [
+    `<span class="filter-summary-label is-filtered">Filtered</span>`,
     ...visibleTokens.map((token) => `<span class="tag">${escapeHtml(token)}</span>`),
     remainder ? `<span class="tag">+${remainder}</span>` : "",
-    `<span class="status-pill">${visiblePlaces.length.toLocaleString("en-US")} places</span>`
+    `<span class="status-pill">${visiblePlaces.length.toLocaleString("en-US")} places</span>`,
+    `<button class="filter-reset-pill" type="button" data-clear-active-filters>Reset</button>`
   ].filter(Boolean).join(" ");
+}
+
+function syncFilterDrawerActions(visiblePlaces, tokens = getActiveFilterTokens()) {
+  const resultLabel = `Show ${pluralize(visiblePlaces.length, "place")}`;
+  filterDone.textContent = resultLabel;
+  filterDone.setAttribute("aria-label", `${resultLabel} and close filters`);
+  clearFilters.disabled = tokens.length === 0;
+  clearFilters.setAttribute(
+    "aria-label",
+    tokens.length ? "Reset search and filters" : "No search or filters to reset"
+  );
 }
 
 function formatNumber(value) {
@@ -742,11 +1931,13 @@ function pluralize(count, singular, plural = `${singular}s`) {
 
 function ensureDetailState(place) {
   const nextId = place?.id || null;
-  if (detailPlaceId === nextId) return;
+  if (detailPlaceId === nextId) return false;
   detailPlaceId = nextId;
   state.detailTab = "overview";
+  state.referenceBook = "all";
   state.referenceSearch = "";
   state.referenceLimit = REFERENCE_PAGE_SIZE;
+  return true;
 }
 
 function referenceDetailsForPlace(place) {
@@ -805,6 +1996,12 @@ function referenceSummaryForPlace(place) {
   };
 }
 
+function normalizeReferenceBook(place) {
+  if (state.referenceBook === "all") return;
+  if (referenceBookCounts(place).some((book) => book.bookId === state.referenceBook)) return;
+  state.referenceBook = "all";
+}
+
 function bibleVerseReferenceLabel(count) {
   return pluralize(count, "Bible verse reference");
 }
@@ -859,6 +2056,34 @@ function renderTopBooks(place, limit = 5) {
           </div>
         `;
       }).join("")}
+    </div>
+  `;
+}
+
+function renderReferenceBookStrip(place) {
+  const books = referenceBookCounts(place);
+  if (!books.length) return "";
+
+  return `
+    <div class="reference-book-strip" role="group" aria-label="Filter this place's references by book">
+      <button
+        class="reference-book-chip${state.referenceBook === "all" ? " is-active" : ""}"
+        type="button"
+        data-reference-book="all"
+      >
+        <span>All books</span>
+        <strong>${formatNumber(referenceDetailsForPlace(place).length)}</strong>
+      </button>
+      ${books.map((book) => `
+        <button
+          class="reference-book-chip${state.referenceBook === book.bookId ? " is-active" : ""}"
+          type="button"
+          data-reference-book="${escapeHtml(book.bookId)}"
+        >
+          <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
+          <strong>${formatNumber(book.count)}</strong>
+        </button>
+      `).join("")}
     </div>
   `;
 }
@@ -999,21 +2224,26 @@ function groupReferenceResults(references) {
 function renderReferenceResultContent(place) {
   const search = state.referenceSearch.trim().toLowerCase();
   const allReferences = referenceDetailsForPlace(place).slice().sort((a, b) => a.sort - b.sort);
-  const filtered = allReferences.filter((reference) => referenceMatchesSearch(reference, search));
+  const scopedReferences = state.referenceBook === "all"
+    ? allReferences
+    : allReferences.filter((reference) => reference.bookId === state.referenceBook);
+  const filtered = scopedReferences.filter((reference) => referenceMatchesSearch(reference, search));
   const visible = filtered.slice(0, state.referenceLimit);
   const hidden = filtered.length - visible.length;
+  const activeBook = referenceBookCounts(place).find((book) => book.bookId === state.referenceBook);
+  const scopeLabel = activeBook ? `${activeBook.bookLabel || activeBook.bookId} references` : "Bible verse references";
 
   if (!filtered.length) {
     return `
       <p class="reference-result-count">No Bible verse references match this search.</p>
-      <div class="empty-state">Try a book name, abbreviation, chapter, or verse reference such as “Genesis 12”.</div>
+      <div class="empty-state">Try another book filter, chapter, or verse reference such as “Genesis 12”.</div>
     `;
   }
 
   const groups = groupReferenceResults(visible);
   return `
     <p class="reference-result-count">
-      Showing ${formatNumber(visible.length)} of ${formatNumber(filtered.length)} matching Bible verse references.
+      Showing ${formatNumber(visible.length)} of ${formatNumber(filtered.length)} ${escapeHtml(scopeLabel)}.
     </p>
     ${groups.map((testamentGroup) => `
       <section class="reference-testament-group">
@@ -1044,14 +2274,17 @@ function renderReferenceResultContent(place) {
       </section>
     `).join("")}
     ${hidden > 0 ? `
-      <button class="ghost-button reference-more-button" id="referenceShowMoreButton" type="button" aria-controls="referenceResults">
-        Show next ${formatNumber(Math.min(REFERENCE_PAGE_SIZE, hidden))} verse references
-      </button>
+      <div class="reference-load-row" aria-live="polite">
+        <span>${formatNumber(hidden)} more references remain in this view.</span>
+        <button class="ghost-button reference-more-button" id="referenceShowMoreButton" type="button" aria-controls="referenceResults">
+          Load next ${formatNumber(Math.min(REFERENCE_PAGE_SIZE, hidden))}
+        </button>
+      </div>
     ` : ""}
   `;
 }
 
-function renderReferenceResults(place) {
+function renderReferenceResults(place, { restoreFocusToLoadMore = false, previousScrollTop = null } = {}) {
   const results = document.getElementById("referenceResults");
   if (!results) return;
   results.innerHTML = renderReferenceResultContent(place);
@@ -1059,14 +2292,33 @@ function renderReferenceResults(place) {
   const showMore = document.getElementById("referenceShowMoreButton");
   if (showMore) {
     showMore.addEventListener("click", () => {
+      const scrollTopBeforeLoad = detailCard.scrollTop;
       state.referenceLimit += REFERENCE_PAGE_SIZE;
-      renderReferenceResults(place);
+      renderReferenceResults(place, {
+        restoreFocusToLoadMore: true,
+        previousScrollTop: scrollTopBeforeLoad
+      });
     });
   }
+  bindScrollEdgeContainers(detailCard, { revealActive: true });
+  if (Number.isFinite(previousScrollTop)) {
+    requestAnimationFrame(() => {
+      const maxScroll = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
+      detailCard.scrollTop = clamp(previousScrollTop, 0, maxScroll);
+      syncDetailScrollState();
+    });
+  }
+  if (restoreFocusToLoadMore) {
+    requestAnimationFrame(() => {
+      const nextShowMore = document.getElementById("referenceShowMoreButton");
+      nextShowMore?.focus({ preventScroll: true });
+    });
+  }
+  requestAnimationFrame(syncDetailScrollState);
 }
 
 function renderDetails(place, visiblePlaces) {
-  ensureDetailState(place);
+  const shouldResetScroll = ensureDetailState(place);
 
   if (!place) {
     detailCard.innerHTML = `
@@ -1074,6 +2326,7 @@ function renderDetails(place, visiblePlaces) {
       <h2 class="detail-title">No places found</h2>
       <div class="empty-state">Adjust the filters or clear search to see mapped OpenBible places.</div>
     `;
+    if (shouldResetScroll) resetDetailScroll();
     return;
   }
 
@@ -1108,6 +2361,7 @@ function renderDetails(place, visiblePlaces) {
     ? externalLinkMarkup("OpenBible modern location", modern.url, "detail-link")
     : "";
   const activeTab = detailTabs.includes(state.detailTab) ? state.detailTab : "overview";
+  normalizeReferenceBook(place);
   const oldTestamentCount = referenceSummary.oldTestamentCount || 0;
   const newTestamentCount = referenceSummary.newTestamentCount || 0;
   const openBibleScore = openBibleScoreLine(place);
@@ -1218,6 +2472,7 @@ function renderDetails(place, visiblePlaces) {
           <span><strong>${formatNumber(oldTestamentCount)}</strong><small>OT</small></span>
           <span><strong>${formatNumber(newTestamentCount)}</strong><small>NT</small></span>
         </div>
+        ${renderReferenceBookStrip(place)}
         <label class="reference-search" for="referenceSearchInput">
           <span>Search this place's references</span>
           <input
@@ -1225,6 +2480,10 @@ function renderDetails(place, visiblePlaces) {
             type="search"
             value="${escapeHtml(state.referenceSearch)}"
             placeholder="Book, chapter, or verse"
+            enterkeyhint="search"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
           >
         </label>
         <p class="detail-note reference-help">This list shows Bible verse references only; it does not include full Bible text.</p>
@@ -1303,29 +2562,22 @@ function renderDetails(place, visiblePlaces) {
     </section>
   `;
 
-  document.getElementById("detailFocusButton").addEventListener("click", () => focusOnLocations([place.id], true));
+  if (shouldResetScroll) resetDetailScroll();
+
+  document.getElementById("detailFocusButton").addEventListener("click", () => centerPlaceFromDetails(place.id));
   document.getElementById("detailPreviousButton").addEventListener("click", () => {
     if (!previousPlace) return;
-    state.selectedId = previousPlace.id;
-    renderAll();
-    focusOnLocations([previousPlace.id], true);
+    selectPlaceFromDetailNav(previousPlace.id, "detailPreviousButton");
   });
   document.getElementById("detailNextButton").addEventListener("click", () => {
     if (!nextPlace) return;
-    state.selectedId = nextPlace.id;
-    renderAll();
-    focusOnLocations([nextPlace.id], true);
+    selectPlaceFromDetailNav(nextPlace.id, "detailNextButton");
   });
 
   detailCard.querySelectorAll("[data-detail-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       const tab = button.dataset.detailTab;
-      if (!detailTabs.includes(tab)) return;
-      state.detailTab = tab;
-      if (tab === "references" && state.referenceLimit < REFERENCE_PAGE_SIZE) {
-        state.referenceLimit = REFERENCE_PAGE_SIZE;
-      }
-      renderDetails(place, visiblePlaces);
+      setDetailTab(tab, place, visiblePlaces);
     });
   });
 
@@ -1338,38 +2590,155 @@ function renderDetails(place, visiblePlaces) {
     });
   }
 
+  detailCard.querySelectorAll("[data-reference-book]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.referenceBook = button.dataset.referenceBook || "all";
+      state.referenceLimit = REFERENCE_PAGE_SIZE;
+      renderDetails(place, visiblePlaces);
+    });
+  });
+
   renderReferenceResults(place);
+  requestAnimationFrame(syncDetailScrollState);
+}
+
+function placeListKeyFor(visiblePlaces) {
+  return visiblePlaces.map((place) => place.id).join("|");
+}
+
+function renderPlaceRow(place, index, className = "") {
+  const variant = placeVariantLabel(place);
+  const classes = ["place-row", state.selectedId === place.id ? "is-selected" : "", className].filter(Boolean).join(" ");
+  return `
+    <button class="${escapeHtml(classes)}" type="button" data-place="${escapeHtml(place.id)}" aria-label="${escapeHtml(accessiblePlaceName(place))}">
+      <span class="place-index">${String(index + 1).padStart(2, "0")}</span>
+      <div class="place-row-copy">
+        <small>${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")}</small>
+        <strong>${escapeHtml(displayPlaceName(place))}</strong>
+        ${variant ? `<span class="place-variant">${escapeHtml(variant)}</span>` : ""}
+      </div>
+      <span class="place-books">${escapeHtml(place.books.slice(0, 3).join(" / ") || pluralize(place.verseCount, "verse"))}</span>
+    </button>
+  `;
+}
+
+function extendPlaceList({ restoreFocusToLoadMore = false } = {}) {
+  const visiblePlaces = visiblePlacesCache.length ? visiblePlacesCache : getVisiblePlaces();
+  if (state.placeListLimit >= visiblePlaces.length) return;
+  const scrollTopBeforeLoad = placeList.scrollTop;
+  state.placeListLimit = Math.min(visiblePlaces.length, state.placeListLimit + PLACE_LIST_PAGE_SIZE);
+  renderPlaceList(visiblePlaces);
+  placeList.scrollTop = scrollTopBeforeLoad;
+  if (restoreFocusToLoadMore) {
+    requestAnimationFrame(() => {
+      document.getElementById("placeListMore")?.focus({ preventScroll: true });
+    });
+  }
+}
+
+function observePlaceListMore(button) {
+  if (placeListObserver) {
+    placeListObserver.disconnect();
+    placeListObserver = null;
+  }
+
+  if (!button || !("IntersectionObserver" in window)) return;
+
+  placeListObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) extendPlaceList();
+  }, {
+    root: placeList,
+    rootMargin: "220px 0px",
+    threshold: 0.01
+  });
+  placeListObserver.observe(button);
+}
+
+function selectedPlaceListRow() {
+  return [...placeList.querySelectorAll("[data-place]")]
+    .find((button) => button.dataset.place === state.selectedId) || null;
+}
+
+function revealSelectedPlaceInList({ force = false } = {}) {
+  if (openDrawer !== "places") return;
+  const selectedRow = selectedPlaceListRow();
+  if (!selectedRow) return;
+
+  const listRect = placeList.getBoundingClientRect();
+  const rowRect = selectedRow.getBoundingClientRect();
+  const isVisible = rowRect.top >= listRect.top + 8 && rowRect.bottom <= listRect.bottom - 8;
+  if (!force && isVisible) return;
+
+  selectedRow.scrollIntoView({
+    block: "nearest",
+    inline: "nearest",
+    behavior: scrollBehavior()
+  });
+  requestAnimationFrame(() => syncScrollEdgeState(placeList));
 }
 
 function renderPlaceList(visiblePlaces) {
   if (!visiblePlaces.length) {
+    observePlaceListMore(null);
+    placeListRenderKey = "";
+    state.placeListLimit = PLACE_LIST_PAGE_SIZE;
     placeList.innerHTML = `<div class="empty-state">No places match the current search and filters.</div>`;
     return;
   }
 
-  placeList.innerHTML = visiblePlaces.map((place, index) => {
-    const variant = placeVariantLabel(place);
-    return `
-      <button class="place-row${state.selectedId === place.id ? " is-selected" : ""}" type="button" data-place="${escapeHtml(place.id)}" aria-label="${escapeHtml(accessiblePlaceName(place))}">
-        <span class="place-index">${String(index + 1).padStart(2, "0")}</span>
-        <div class="place-row-copy">
-          <small>${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")}</small>
-          <strong>${escapeHtml(displayPlaceName(place))}</strong>
-          ${variant ? `<span class="place-variant">${escapeHtml(variant)}</span>` : ""}
-        </div>
-        <span class="place-books">${escapeHtml(place.books.slice(0, 3).join(" / ") || pluralize(place.verseCount, "verse"))}</span>
+  const nextKey = placeListKeyFor(visiblePlaces);
+  if (nextKey !== placeListRenderKey) {
+    placeListRenderKey = nextKey;
+    state.placeListLimit = PLACE_LIST_PAGE_SIZE;
+    placeList.scrollTop = 0;
+  }
+
+  const renderedCount = Math.min(state.placeListLimit, visiblePlaces.length);
+  const visibleSlice = visiblePlaces.slice(0, renderedCount);
+  const hidden = visiblePlaces.length - renderedCount;
+  const selectedIndex = visiblePlaces.findIndex((place) => place.id === state.selectedId);
+  const selectedOutsideSlice = selectedIndex >= renderedCount;
+  const selectedPin = selectedOutsideSlice
+    ? `
+      <div class="place-list-pinned">
+        <p>Selected place</p>
+        ${renderPlaceRow(visiblePlaces[selectedIndex], selectedIndex, "is-pinned")}
+      </div>
+    `
+    : "";
+  listCounter.textContent = hidden
+    ? `${formatNumber(renderedCount)} of ${formatNumber(visiblePlaces.length)}`
+    : `${formatNumber(visiblePlaces.length)} place${visiblePlaces.length === 1 ? "" : "s"}`;
+  const loadMore = hidden > 0
+    ? `
+      <button class="place-list-more" type="button" id="placeListMore">
+        <span>Showing ${formatNumber(renderedCount)} of ${formatNumber(visiblePlaces.length)}</span>
+        <strong>Show next ${formatNumber(Math.min(PLACE_LIST_PAGE_SIZE, hidden))}</strong>
       </button>
-    `;
-  }).join("");
+    `
+    : `<p class="place-list-end">Showing all ${formatNumber(visiblePlaces.length)} places.</p>`;
+
+  placeList.innerHTML = `
+    ${selectedPin}
+    ${visibleSlice.map((place, index) => renderPlaceRow(place, index)).join("")}
+    ${loadMore}
+  `;
 
   placeList.querySelectorAll("[data-place]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.selectedId = button.dataset.place;
-      closeDrawers();
-      renderAll();
-      focusOnLocations([state.selectedId], true);
+      selectPlaceFromList(button.dataset.place);
     });
   });
+
+  const moreButton = document.getElementById("placeListMore");
+  if (moreButton) moreButton.addEventListener("click", () => extendPlaceList({ restoreFocusToLoadMore: true }));
+  observePlaceListMore(moreButton);
+}
+
+function handlePlaceListScroll() {
+  if (openDrawer !== "places") return;
+  if (placeList.scrollTop + placeList.clientHeight < placeList.scrollHeight - 260) return;
+  extendPlaceList();
 }
 
 function renderSummary(visiblePlaces) {
@@ -1381,7 +2750,26 @@ function renderSummary(visiblePlaces) {
   summaryText.textContent = route ? route.description : "All mapped OpenBible places are visible.";
 }
 
+function renderMobilePlaceSummary(place) {
+  if (!place) {
+    mobilePlaceSummary.disabled = true;
+    mobilePlaceSummaryTitle.textContent = "No selected place";
+    mobilePlaceSummaryMeta.textContent = "Adjust filters or select a visible map point.";
+    mobilePlaceSummaryAction.textContent = "Details";
+    mobilePlaceSummary.setAttribute("aria-label", "No selected place details");
+    return;
+  }
+
+  const summary = referenceSummaryForPlace(place);
+  const modernName = place.bestIdentification?.modern?.name || place.bestIdentification?.name || "modern identification";
+  mobilePlaceSummary.disabled = false;
+  mobilePlaceSummaryTitle.textContent = displayPlaceName(place);
+  mobilePlaceSummaryMeta.textContent = `${confidenceMeta[place.confidence]?.label || "Unknown"} confidence · ${pluralize(summary.bookCount, "book")} · ${modernName}`;
+}
+
 function renderMiniCard(place) {
+  renderMobilePlaceSummary(place);
+
   if (!place) {
     miniCard.disabled = true;
     miniCard.classList.add("is-empty");
@@ -1412,10 +2800,6 @@ function renderMiniCard(place) {
       </span>
       <span>${escapeHtml(modernName)}</span>
       ${routeNote}
-    </span>
-    <span class="mini-card-affordance" aria-hidden="true">
-      <span>Details</span>
-      <span class="mini-card-arrow">↓</span>
     </span>
   `;
 }
@@ -1512,11 +2896,26 @@ function ensurePlaceLayers() {
     source: SOURCE_ID,
     filter: ["==", ["get", "selected"], true],
     paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 7, 6, 14, 10, 24],
-      "circle-color": confidenceColorExpression(),
-      "circle-opacity": 0.2,
-      "circle-stroke-color": "#fff7e6",
-      "circle-stroke-width": 2
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 8, 6, 16, 10, 28],
+      "circle-color": "#fff7e6",
+      "circle-opacity": 0.34,
+      "circle-stroke-color": "#23302c",
+      "circle-stroke-width": 1.4
+    }
+  });
+
+  map.addLayer({
+    id: ROUTE_MEMBER_LAYER_ID,
+    type: "circle",
+    source: SOURCE_ID,
+    filter: ["all", ["==", ["get", "inRoute"], true], ["!=", ["get", "selected"], true]],
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 5.5, 6, 11, 10, 19],
+      "circle-color": ["get", "routeColor"],
+      "circle-opacity": 0.18,
+      "circle-stroke-color": ["get", "routeColor"],
+      "circle-stroke-opacity": 0.88,
+      "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 2, 1.1, 8, 2.2]
     }
   });
 
@@ -1534,9 +2933,25 @@ function ensurePlaceLayers() {
         10, ["case", ["==", ["get", "selected"], true], 13, 7]
       ],
       "circle-color": confidenceColorExpression(),
-      "circle-opacity": ["case", ["==", ["get", "muted"], true], 0.26, 0.84],
-      "circle-stroke-color": ["case", ["==", ["get", "selected"], true], "#fff7e6", "rgba(255,255,255,0.86)"],
-      "circle-stroke-width": ["case", ["==", ["get", "selected"], true], 2.4, 1.1]
+      "circle-opacity": [
+        "case",
+        ["==", ["get", "selected"], true], 0.98,
+        ["==", ["get", "inRoute"], true], 0.92,
+        ["==", ["get", "muted"], true], 0.16,
+        0.84
+      ],
+      "circle-stroke-color": [
+        "case",
+        ["==", ["get", "selected"], true], "#fff7e6",
+        ["==", ["get", "inRoute"], true], ["get", "routeColor"],
+        "rgba(255,255,255,0.86)"
+      ],
+      "circle-stroke-width": [
+        "case",
+        ["==", ["get", "selected"], true], 2.8,
+        ["==", ["get", "inRoute"], true], 1.8,
+        1.1
+      ]
     }
   });
 
@@ -1561,25 +2976,35 @@ function ensurePlaceLayers() {
       "text-color": "#1f2a26",
       "text-halo-color": "rgba(255, 252, 246, 0.92)",
       "text-halo-width": 1.6,
-      "text-opacity": ["case", ["==", ["get", "muted"], true], 0.42, 0.95]
+      "text-opacity": [
+        "case",
+        ["==", ["get", "selected"], true], 1,
+        ["==", ["get", "inRoute"], true], 0.96,
+        ["==", ["get", "muted"], true], 0.26,
+        0.95
+      ]
     }
   });
 
   map.on("click", CIRCLE_LAYER_ID, (event) => {
     const feature = event.features?.[0];
     if (!feature?.properties?.id) return;
-    state.selectedId = feature.properties.id;
-    renderAll();
+    selectPlace(feature.properties.id, { revealSheet: true });
   });
 
   map.on("click", SELECTED_LAYER_ID, (event) => {
     const feature = event.features?.[0];
     if (!feature?.properties?.id) return;
-    state.selectedId = feature.properties.id;
-    renderAll();
+    selectPlace(feature.properties.id, { revealSheet: true });
   });
 
-  [CIRCLE_LAYER_ID, SELECTED_LAYER_ID].forEach((layerId) => {
+  map.on("click", ROUTE_MEMBER_LAYER_ID, (event) => {
+    const feature = event.features?.[0];
+    if (!feature?.properties?.id) return;
+    selectPlace(feature.properties.id, { revealSheet: true });
+  });
+
+  [CIRCLE_LAYER_ID, SELECTED_LAYER_ID, ROUTE_MEMBER_LAYER_ID].forEach((layerId) => {
     map.on("mouseenter", layerId, () => {
       map.getCanvas().style.cursor = "pointer";
     });
@@ -1740,6 +3165,7 @@ function initializeMap() {
       customAttribution: `${externalLinkMarkup("OpenBible.info Bible Geocoding Data", sourceMeta.sourceUrl, "map-attribution-link")} ${sourceMeta.license}`
     }
   });
+  syncMapGestureMode();
 
   map.on("load", () => {
     mapLoaded = true;
@@ -1762,10 +3188,6 @@ function initializeMap() {
     }
   });
 
-  window.addEventListener("resize", () => {
-    if (!map) return;
-    map.resize();
-  });
 }
 
 function renderAll() {
@@ -1778,28 +3200,66 @@ function renderAll() {
   renderMiniCard(selectedPlace);
   renderPlaceList(visiblePlaces);
   renderDetails(selectedPlace, visiblePlaces);
+  setPlaceSheetState(state.placeSheet, { updateMapPadding: false, animate: false });
   renderMap(visiblePlaces);
+  requestAnimationFrame(() => bindScrollEdgeContainers(document, { revealActive: true }));
 }
 
 function bindGlobalEvents() {
+  syncViewportMetrics();
+  window.addEventListener("resize", scheduleViewportChange);
+  window.addEventListener("popstate", handleOverlayPopState);
+  window.visualViewport?.addEventListener("resize", scheduleViewportChange, { passive: true });
+  window.visualViewport?.addEventListener("scroll", scheduleViewportChange, { passive: true });
+
   miniCard.addEventListener("click", revealSelectedDetails);
+  mobilePlaceSummary.addEventListener("click", () => {
+    if (!isMobileLayout() || mobilePlaceSummary.disabled) return;
+    cyclePlaceSheetState();
+  });
+  detailCard.addEventListener("pointerdown", beginDetailTabSwipe);
+  detailCard.addEventListener("focusin", handleDetailFocusIn);
+  detailCard.addEventListener("scroll", syncDetailScrollState, { passive: true });
+  document.addEventListener("pointermove", moveDismissDrag);
+  document.addEventListener("pointermove", moveDetailTabSwipe);
+  document.addEventListener("pointerup", endDismissDrag);
+  document.addEventListener("pointerup", endDetailTabSwipe);
+  document.addEventListener("pointercancel", endDismissDrag);
+  document.addEventListener("pointercancel", endDetailTabSwipe);
 
   filterToggle.addEventListener("click", () => {
     setDrawer("filters", openDrawer !== "filters");
   });
   filterClose.addEventListener("click", closeDrawers);
+  filterPanel.addEventListener("pointerdown", (event) => beginDismissDrag(event, "filters"));
 
   placesToggle.addEventListener("click", () => {
+    if (isMobileLayout()) setPlaceSheetState("peek", { animate: false });
     setDrawer("places", openDrawer !== "places");
   });
   placesClose.addEventListener("click", closeDrawers);
+  placesPanel.addEventListener("pointerdown", (event) => beginDismissDrag(event, "places"));
+  placeList.addEventListener("scroll", handlePlaceListScroll, { passive: true });
 
   aboutToggle.addEventListener("click", () => {
     setDrawer("about", openDrawer !== "about");
   });
   aboutClose.addEventListener("click", closeDrawers);
+  aboutPanel.addEventListener("pointerdown", (event) => beginDismissDrag(event, "about"));
 
   drawerScrim.addEventListener("click", closeDrawers);
+  routeMenuScrim.addEventListener("click", () => closeRouteMenu(true));
+  routeMenu.addEventListener("pointerdown", (event) => beginDismissDrag(event, "route"));
+  placesBackdrop.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeDrawers();
+  });
+  mapStage.addEventListener("pointerdown", (event) => {
+    if (!isMobileLayout() || event.button > 0) return;
+    if (event.target instanceof Element && event.target.closest("button, a, input, select, textarea, [role='button']")) return;
+    blurActiveMobileControl();
+  }, { passive: true });
 
   document.addEventListener("click", (event) => {
     if (openDrawer !== "places") return;
@@ -1812,11 +3272,7 @@ function bindGlobalEvents() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (openDrawer) {
-      closeDrawers();
-      return;
-    }
-    if (!routeMenu.hidden) closeRouteMenu(true);
+    if (closeTopMobileOverlay()) event.preventDefault();
   });
 
   zoomIn.addEventListener("click", () => {
@@ -1831,7 +3287,7 @@ function bindGlobalEvents() {
 
   compassReset.addEventListener("click", () => {
     if (!mapLoaded || !map) return;
-    map.easeTo({ bearing: 0, pitch: 0, duration: 500 });
+    map.easeTo({ bearing: 0, pitch: 0, duration: motionDuration(500) });
     fitDefaultView(true);
   });
 
@@ -1840,23 +3296,45 @@ function bindGlobalEvents() {
   filterDone.addEventListener("click", closeDrawers);
 
   clearFilters.addEventListener("click", () => {
-    state.testament = "all";
-    state.book = "all";
-    state.confidence = "all";
-    state.type = "all";
+    resetSearchAndFilters({ fitMap: true });
+  });
+
+  activeFilters.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const resetButton = event.target.closest("[data-clear-active-filters]");
+    if (!resetButton) return;
+    resetSearchAndFilters({ fitMap: true });
+  });
+
+  searchClear.addEventListener("click", () => {
     state.search = "";
-    searchInput.value = "";
     renderAll();
-    fitDefaultView(true);
+    searchInput.focus();
+  });
+
+  searchForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitSearch();
   });
 
   searchInput.addEventListener("input", () => {
     state.search = searchInput.value;
     renderAll();
   });
+
+  searchInput.addEventListener("focus", handleSearchFocus);
+
+  searchInput.addEventListener("search", () => {
+    state.search = searchInput.value;
+    renderAll();
+  });
 }
 
 function renderLoading() {
+  mobilePlaceSummary.disabled = true;
+  mobilePlaceSummaryTitle.textContent = "Loading places";
+  mobilePlaceSummaryMeta.textContent = "Preparing the OpenBible data snapshot.";
+  mobilePlaceSummaryAction.textContent = "Details";
   detailCard.innerHTML = `
     <p class="section-label">Data</p>
     <h2 class="detail-title">Loading places</h2>
@@ -1889,6 +3367,10 @@ async function boot() {
   try {
     await loadOpenBibleData();
   } catch (error) {
+    mobilePlaceSummary.disabled = true;
+    mobilePlaceSummaryTitle.textContent = "Data unavailable";
+    mobilePlaceSummaryMeta.textContent = "The OpenBible data snapshot could not load.";
+    mobilePlaceSummaryAction.textContent = "Details";
     detailCard.innerHTML = `
       <p class="section-label">Data</p>
       <h2 class="detail-title">Data unavailable</h2>

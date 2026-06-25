@@ -1,0 +1,19 @@
+{
+  "name": "Bible Map",
+  "short_name": "Bible Map",
+  "description": "A source-backed map of biblical places using OpenBible.info geocoding data.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111511",
+  "theme_color": "#111511",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
