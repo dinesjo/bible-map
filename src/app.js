@@ -39,6 +39,7 @@ const detailTabs = ["overview", "references", "evidence"];
 const REFERENCE_PAGE_SIZE = 160;
 const PLACE_LIST_PAGE_SIZE = 160;
 const MOBILE_MEDIA_QUERY = "(max-width: 760px)";
+const SHORT_LANDSCAPE_MEDIA_QUERY = "(max-width: 760px) and (max-height: 500px) and (orientation: landscape)";
 const sheetStates = ["peek", "half", "full"];
 const sheetBreakByState = { peek: "bottom", half: "middle", full: "top" };
 const sheetStateByBreak = { bottom: "peek", middle: "half", top: "full" };
@@ -538,12 +539,12 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function mobileSheetPeekHeight(viewportHeight = currentViewportHeight()) {
-  return viewportHeight <= 500 ? 80 : MOBILE_SHEET_PEEK;
+function mobileSheetPeekHeight() {
+  return window.matchMedia(SHORT_LANDSCAPE_MEDIA_QUERY).matches ? 80 : MOBILE_SHEET_PEEK;
 }
 
 function placeSheetMaxHeight(viewportHeight = currentViewportHeight()) {
-  const peekHeight = mobileSheetPeekHeight(viewportHeight);
+  const peekHeight = mobileSheetPeekHeight();
   return Math.max(
     peekHeight + 2,
     Math.min(viewportHeight * 0.82, 720, Math.max(peekHeight + 2, viewportHeight - 72))
@@ -570,7 +571,7 @@ function releasePointer(element, pointerId) {
 function placeSheetBreaks() {
   const viewportHeight = currentViewportHeight();
   const sheetHeight = placeSheetMaxHeight(viewportHeight);
-  const peekHeight = Math.min(mobileSheetPeekHeight(viewportHeight), sheetHeight - 2);
+  const peekHeight = Math.min(mobileSheetPeekHeight(), sheetHeight - 2);
   const halfTarget = viewportHeight <= 500
     ? Math.max(viewportHeight * 0.5, peekHeight + 56)
     : Math.max(viewportHeight * 0.54, 330);
