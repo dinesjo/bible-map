@@ -39,6 +39,7 @@ const detailTabs = ["overview", "references", "evidence"];
 const REFERENCE_PAGE_SIZE = 160;
 const PLACE_LIST_PAGE_SIZE = 160;
 const MOBILE_MEDIA_QUERY = "(max-width: 760px)";
+const SHORT_LANDSCAPE_MEDIA_QUERY = "(max-width: 760px) and (max-height: 500px) and (orientation: landscape)";
 const sheetStates = ["peek", "half", "full"];
 const sheetBreakByState = { peek: "bottom", half: "middle", full: "top" };
 const sheetStateByBreak = { bottom: "peek", middle: "half", top: "full" };
@@ -115,8 +116,11 @@ const sheetModalSiblings = [
 ].filter(Boolean);
 const placesModalSiblings = [
   document.querySelector(".atlas-bar"),
-  inspectorPanel
+  document.querySelector(".map-strip"),
+  inspectorPanel,
+  ...[...mapStage.children].filter((element) => element !== placesPanel && element !== placesBackdrop)
 ].filter(Boolean);
+const mapStageTabIndex = mapStage.getAttribute("tabindex");
 const routeModalSiblings = [
   document.querySelector(".brand-block"),
   searchForm,
@@ -171,12 +175,17 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function iconMarkup(name, className = "") {
+  const classes = ["ui-icon", className].filter(Boolean).join(" ");
+  return `<svg class="${escapeHtml(classes)}" aria-hidden="true" focusable="false"><use href="#icon-${escapeHtml(name)}"></use></svg>`;
+}
+
 function externalLinkMarkup(label, href, className = "") {
   const classes = ["external-link", className].filter(Boolean).join(" ");
   return `
     <a class="${escapeHtml(classes)}" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">
       <span>${escapeHtml(label)}</span>
-      <span class="external-link-icon" aria-hidden="true"></span>
+      ${iconMarkup("external", "external-link-icon")}
       <span class="sr-only">opens in a new tab</span>
     </a>
   `;
@@ -530,11 +539,15 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function placeSheetMaxHeight() {
-  const viewportHeight = currentViewportHeight();
+function mobileSheetPeekHeight() {
+  return window.matchMedia(SHORT_LANDSCAPE_MEDIA_QUERY).matches ? 80 : MOBILE_SHEET_PEEK;
+}
+
+function placeSheetMaxHeight(viewportHeight = currentViewportHeight()) {
+  const peekHeight = mobileSheetPeekHeight();
   return Math.max(
-    MOBILE_SHEET_PEEK + 2,
-    Math.min(viewportHeight * 0.82, 720, Math.max(MOBILE_SHEET_PEEK + 2, viewportHeight - 72))
+    peekHeight + 2,
+    Math.min(viewportHeight * 0.82, 720, Math.max(peekHeight + 2, viewportHeight - 72))
   );
 }
 
@@ -557,9 +570,12 @@ function releasePointer(element, pointerId) {
 
 function placeSheetBreaks() {
   const viewportHeight = currentViewportHeight();
-  const sheetHeight = placeSheetMaxHeight();
-  const peekHeight = Math.min(MOBILE_SHEET_PEEK, sheetHeight - 2);
-  const halfHeight = clamp(Math.max(viewportHeight * 0.54, 330), peekHeight + 1, sheetHeight - 1);
+  const sheetHeight = placeSheetMaxHeight(viewportHeight);
+  const peekHeight = Math.min(mobileSheetPeekHeight(), sheetHeight - 2);
+  const halfTarget = viewportHeight <= 500
+    ? Math.max(viewportHeight * 0.5, peekHeight + 56)
+    : Math.max(viewportHeight * 0.54, 330);
+  const halfHeight = clamp(halfTarget, peekHeight + 1, sheetHeight - 1);
 
   return {
     top: { enabled: true, height: Math.round(sheetHeight) },
@@ -872,6 +888,13 @@ function syncOverlayHistory() {
 }
 
 function syncPlaceSheetSummaryState() {
+  if (mobilePlaceSummary.disabled) {
+    mobilePlaceSummary.setAttribute("aria-expanded", "false");
+    mobilePlaceSummary.setAttribute("aria-label", "No selected place details");
+    mobilePlaceSummaryAction.textContent = "Unavailable";
+    return;
+  }
+
   mobilePlaceSummary.setAttribute("aria-expanded", String(state.placeSheet !== "peek"));
   mobilePlaceSummary.setAttribute(
     "aria-label",
@@ -1161,8 +1184,25 @@ function endDismissDrag(event) {
   clearDismissDragStyles(drag.panel);
 }
 
-function setDetailTab(tab, place = placeById(state.selectedId), visiblePlaces = visiblePlacesCache, { anchorOnMobile = true } = {}) {
+function focusRenderedDetailTab(tab, previousInspectorScrollTop) {
+  requestAnimationFrame(() => {
+    const target = detailCard.querySelector(`[role="tab"][data-detail-tab="${tab}"]`);
+    target?.focus({ preventScroll: true });
+    if (Number.isFinite(previousInspectorScrollTop)) {
+      const maxScroll = Math.max(0, inspectorPanel.scrollHeight - inspectorPanel.clientHeight);
+      inspectorPanel.scrollTop = clamp(previousInspectorScrollTop, 0, maxScroll);
+    }
+  });
+}
+
+function setDetailTab(
+  tab,
+  place = placeById(state.selectedId),
+  visiblePlaces = visiblePlacesCache,
+  { anchorOnMobile = true, restoreFocus = false } = {}
+) {
   if (!detailTabs.includes(tab) || !place) return false;
+  const previousInspectorScrollTop = inspectorPanel.scrollTop;
   const previousTab = state.detailTab;
   const changedTab = state.detailTab !== tab;
   if (changedTab) rememberDetailScroll(place.id, previousTab);
@@ -1174,7 +1214,26 @@ function setDetailTab(tab, place = placeById(state.selectedId), visiblePlaces = 
   if (changedTab && anchorOnMobile && isMobileLayout() && !restoreDetailScroll(place.id, tab)) {
     requestAnimationFrame(anchorDetailTabsAfterRender);
   }
+  if (restoreFocus) focusRenderedDetailTab(tab, previousInspectorScrollTop);
   return changedTab;
+}
+
+function handleDetailTabKeydown(event, place, visiblePlaces) {
+  const tab = event.currentTarget.dataset.detailTab;
+  const activeIndex = detailTabs.indexOf(tab);
+  if (activeIndex === -1) return;
+
+  let nextIndex = null;
+  if (event.key === "ArrowLeft") nextIndex = (activeIndex - 1 + detailTabs.length) % detailTabs.length;
+  if (event.key === "ArrowRight") nextIndex = (activeIndex + 1) % detailTabs.length;
+  if (event.key === "Home") nextIndex = 0;
+  if (event.key === "End") nextIndex = detailTabs.length - 1;
+  if (nextIndex === null) return;
+
+  event.preventDefault();
+  const nextTab = detailTabs[nextIndex];
+  if (nextTab === tab) return;
+  setDetailTab(nextTab, place, visiblePlaces, { restoreFocus: true });
 }
 
 function switchDetailTabByOffset(direction) {
@@ -1381,6 +1440,19 @@ function syncOverlayInert() {
       element.removeAttribute("inert");
     }
   });
+
+  if (placesOpen) {
+    mapStage.setAttribute("tabindex", "-1");
+  } else if (mapStageTabIndex === null) {
+    mapStage.removeAttribute("tabindex");
+  } else {
+    mapStage.setAttribute("tabindex", mapStageTabIndex);
+  }
+
+  // The backdrop remains pointer-operable as a redundant close target, while
+  // the close button inside the modal remains the keyboard-accessible action.
+  placesBackdrop.setAttribute("tabindex", "-1");
+  placesBackdrop.setAttribute("aria-hidden", "true");
 }
 
 function setDrawer(name, open) {
@@ -1580,7 +1652,10 @@ function handleViewportChange() {
 
   if (!map) return;
   map.resize();
-  if (mapLoaded) map.easeTo({ padding: mapViewPadding(), duration: 0 });
+  if (mapLoaded) {
+    map.easeTo({ padding: mapViewPadding(), duration: 0 });
+    collapseCompactMapAttribution();
+  }
 }
 
 function scheduleViewportChange() {
@@ -1805,7 +1880,7 @@ function renderAfterFilterControlChange(container, dataKey, value) {
 }
 
 function buildFilterChip(label, active, dataset, className = "toggle-chip", prefix = "") {
-  return `<button class="${className}${active ? " is-active" : ""}" type="button" ${dataset}>${prefix}${escapeHtml(label)}</button>`;
+  return `<button class="${className}${active ? " is-active" : ""}" type="button" aria-pressed="${active}" ${dataset}>${prefix}${escapeHtml(label)}</button>`;
 }
 
 function renderStaticControls() {
@@ -1833,20 +1908,20 @@ function renderStaticControls() {
   ].join("");
 
   bookFilters.innerHTML = [
-    `<button class="book-chip${state.book === "all" ? " is-active" : ""}" type="button" data-book="all">All books</button>`,
+    `<button class="book-chip${state.book === "all" ? " is-active" : ""}" type="button" aria-pressed="${state.book === "all"}" data-book="all">All books</button>`,
     ...uniqueBooks().map((book) => `
-      <button class="book-chip${state.book === book ? " is-active" : ""}" type="button" data-book="${escapeHtml(book)}">
+      <button class="book-chip${state.book === book ? " is-active" : ""}" type="button" aria-pressed="${state.book === book}" data-book="${escapeHtml(book)}">
         ${escapeHtml(book)}
       </button>
     `)
   ].join("");
 
   typeFilters.innerHTML = [
-    `<button class="character-button${state.type === "all" ? " is-active" : ""}" type="button" data-type="all">
+    `<button class="character-button${state.type === "all" ? " is-active" : ""}" type="button" aria-pressed="${state.type === "all"}" data-type="all">
       <span class="character-copy"><strong>All types</strong></span>
     </button>`,
     ...uniqueTypes().map(({ type, count }) => `
-      <button class="character-button${state.type === type ? " is-active" : ""}" type="button" data-type="${escapeHtml(type)}">
+      <button class="character-button${state.type === type ? " is-active" : ""}" type="button" aria-pressed="${state.type === type}" data-type="${escapeHtml(type)}">
         <span class="character-copy">
           <strong>${escapeHtml(typeLabel(type))}</strong>
           <small>${count.toLocaleString("en-US")}</small>
@@ -1893,8 +1968,7 @@ function renderActiveFilters(visiblePlaces) {
 
   if (!tokens.length) {
     activeFilters.innerHTML = `
-      <span class="filter-summary-label">All mapped places</span>
-      <span class="status-pill">${visiblePlaces.length.toLocaleString("en-US")} places</span>
+      <span class="filter-summary-label">${visiblePlaces.length.toLocaleString("en-US")} mapped places</span>
     `;
     return;
   }
@@ -2069,6 +2143,7 @@ function renderReferenceBookStrip(place) {
       <button
         class="reference-book-chip${state.referenceBook === "all" ? " is-active" : ""}"
         type="button"
+        aria-pressed="${state.referenceBook === "all"}"
         data-reference-book="all"
       >
         <span>All books</span>
@@ -2078,6 +2153,7 @@ function renderReferenceBookStrip(place) {
         <button
           class="reference-book-chip${state.referenceBook === book.bookId ? " is-active" : ""}"
           type="button"
+          aria-pressed="${state.referenceBook === book.bookId}"
           data-reference-book="${escapeHtml(book.bookId)}"
         >
           <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
@@ -2153,6 +2229,7 @@ function renderDetailTabs(activeTab) {
           role="tab"
           aria-selected="${activeTab === tab}"
           aria-controls="detail-panel-${tab}"
+          tabindex="${activeTab === tab ? "0" : "-1"}"
           data-detail-tab="${tab}"
         >
           ${escapeHtml(labels[tab])}
@@ -2256,6 +2333,7 @@ function renderReferenceResultContent(place) {
             <summary>
               <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
               <strong>${pluralize(book.count, "verse")}</strong>
+              ${iconMarkup("chevron", "disclosure-icon")}
             </summary>
             <div class="reference-chapter-stack">
               ${[...book.chapters.values()].map((chapter) => `
@@ -2315,6 +2393,26 @@ function renderReferenceResults(place, { restoreFocusToLoadMore = false, previou
     });
   }
   requestAnimationFrame(syncDetailScrollState);
+}
+
+function selectReferenceBook(book, place, visiblePlaces) {
+  const previousScrollTop = detailCard.scrollTop;
+  const previousInspectorScrollTop = inspectorPanel.scrollTop;
+  state.referenceBook = book || "all";
+  state.referenceLimit = REFERENCE_PAGE_SIZE;
+  renderDetails(place, visiblePlaces);
+
+  requestAnimationFrame(() => {
+    const target = [...detailCard.querySelectorAll("[data-reference-book]")]
+      .find((button) => button.dataset.referenceBook === state.referenceBook);
+    target?.focus({ preventScroll: true });
+
+    const maxScroll = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
+    detailCard.scrollTop = clamp(previousScrollTop, 0, maxScroll);
+    const maxInspectorScroll = Math.max(0, inspectorPanel.scrollHeight - inspectorPanel.clientHeight);
+    inspectorPanel.scrollTop = clamp(previousInspectorScrollTop, 0, maxInspectorScroll);
+    syncDetailScrollState();
+  });
 }
 
 function renderDetails(place, visiblePlaces) {
@@ -2393,7 +2491,7 @@ function renderDetails(place, visiblePlaces) {
     </p>
     <div class="detail-actions">
       <button class="ghost-button" id="detailFocusButton" type="button" aria-label="Center map on ${escapeHtml(accessiblePlaceName(place))}">Center map</button>
-      ${externalLinkMarkup("OpenBible place record", place.links.openBible, "ghost-button detail-action-link")}
+      ${externalLinkMarkup("View source record", place.links.openBible, "ghost-button detail-action-link")}
     </div>
     <nav class="visible-place-nav" aria-label="Browse visible places">
       <button
@@ -2403,7 +2501,7 @@ function renderDetails(place, visiblePlaces) {
         aria-label="Previous visible place"
         ${previousPlace ? "" : "disabled"}
       >
-        <span aria-hidden="true">←</span>
+        ${iconMarkup("arrow-left", "nav-arrow")}
         <strong>Previous</strong>
       </button>
       <span class="visible-place-position">${escapeHtml(positionText)}</span>
@@ -2415,7 +2513,7 @@ function renderDetails(place, visiblePlaces) {
         ${nextPlace ? "" : "disabled"}
       >
         <strong>Next</strong>
-        <span aria-hidden="true">→</span>
+        ${iconMarkup("arrow-right", "nav-arrow")}
       </button>
     </nav>
     ${renderDetailTabs(activeTab)}
@@ -2496,6 +2594,7 @@ function renderDetails(place, visiblePlaces) {
         <summary>
           <span>References by book</span>
           <strong>${pluralize(referenceSummary.bookCount, "book")}</strong>
+          ${iconMarkup("chevron", "disclosure-icon")}
         </summary>
         ${renderTopBooks(place, 80)}
       </details>
@@ -2577,8 +2676,11 @@ function renderDetails(place, visiblePlaces) {
   detailCard.querySelectorAll("[data-detail-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       const tab = button.dataset.detailTab;
-      setDetailTab(tab, place, visiblePlaces);
+      setDetailTab(tab, place, visiblePlaces, { restoreFocus: true });
     });
+    if (button.getAttribute("role") === "tab") {
+      button.addEventListener("keydown", (event) => handleDetailTabKeydown(event, place, visiblePlaces));
+    }
   });
 
   const referenceSearchInput = document.getElementById("referenceSearchInput");
@@ -2592,9 +2694,7 @@ function renderDetails(place, visiblePlaces) {
 
   detailCard.querySelectorAll("[data-reference-book]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.referenceBook = button.dataset.referenceBook || "all";
-      state.referenceLimit = REFERENCE_PAGE_SIZE;
-      renderDetails(place, visiblePlaces);
+      selectReferenceBook(button.dataset.referenceBook, place, visiblePlaces);
     });
   });
 
@@ -2608,9 +2708,10 @@ function placeListKeyFor(visiblePlaces) {
 
 function renderPlaceRow(place, index, className = "") {
   const variant = placeVariantLabel(place);
-  const classes = ["place-row", state.selectedId === place.id ? "is-selected" : "", className].filter(Boolean).join(" ");
+  const selected = state.selectedId === place.id;
+  const classes = ["place-row", selected ? "is-selected" : "", variant ? "has-variant" : "", className].filter(Boolean).join(" ");
   return `
-    <button class="${escapeHtml(classes)}" type="button" data-place="${escapeHtml(place.id)}" aria-label="${escapeHtml(accessiblePlaceName(place))}">
+    <button class="${escapeHtml(classes)}" type="button" data-place="${escapeHtml(place.id)}" aria-current="${selected}" aria-label="${escapeHtml(accessiblePlaceName(place))}">
       <span class="place-index">${String(index + 1).padStart(2, "0")}</span>
       <div class="place-row-copy">
         <small>${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")}</small>
@@ -2755,7 +2856,7 @@ function renderMobilePlaceSummary(place) {
     mobilePlaceSummary.disabled = true;
     mobilePlaceSummaryTitle.textContent = "No selected place";
     mobilePlaceSummaryMeta.textContent = "Adjust filters or select a visible map point.";
-    mobilePlaceSummaryAction.textContent = "Details";
+    mobilePlaceSummaryAction.textContent = "Unavailable";
     mobilePlaceSummary.setAttribute("aria-label", "No selected place details");
     return;
   }
@@ -3130,7 +3231,7 @@ function setMapFallback(message = "MapLibre or the vector basemap could not load
     <strong>Map layer unavailable</strong>
     <span>${escapeHtml(message)} Open the app with network access for the basemap.</span>
   `;
-  [zoomIn, zoomOut, zoomHome].forEach((button) => {
+  [zoomIn, zoomOut, zoomHome, compassReset].forEach((button) => {
     button.disabled = true;
     button.style.opacity = "0.55";
     button.style.cursor = "not-allowed";
@@ -3139,11 +3240,26 @@ function setMapFallback(message = "MapLibre or the vector basemap could not load
 
 function clearMapFallback() {
   mapFallback.classList.remove("is-visible");
-  [zoomIn, zoomOut, zoomHome].forEach((button) => {
+  [zoomIn, zoomOut, zoomHome, compassReset].forEach((button) => {
     button.disabled = false;
     button.style.opacity = "";
     button.style.cursor = "";
   });
+}
+
+function collapseCompactMapAttribution() {
+  if (!window.matchMedia("(max-width: 900px)").matches || !map) return;
+  const attribution = map.getContainer().querySelector(".maplibregl-ctrl-attrib");
+  if (!attribution) return;
+  attribution.removeAttribute("open");
+  attribution.classList.remove("maplibregl-compact-show");
+}
+
+function configureMapAccessibility() {
+  if (!map) return;
+  const canvas = map.getCanvas();
+  canvas.setAttribute("aria-hidden", "true");
+  canvas.setAttribute("tabindex", "-1");
 }
 
 function initializeMap() {
@@ -3165,6 +3281,7 @@ function initializeMap() {
       customAttribution: `${externalLinkMarkup("OpenBible.info Bible Geocoding Data", sourceMeta.sourceUrl, "map-attribution-link")} ${sourceMeta.license}`
     }
   });
+  configureMapAccessibility();
   syncMapGestureMode();
 
   map.on("load", () => {
@@ -3174,6 +3291,8 @@ function initializeMap() {
     ensurePlaceLayers();
     ensureRouteLayers();
     localizeBaseMapToEnglish();
+    configureMapAccessibility();
+    collapseCompactMapAttribution();
     syncCompass();
     renderAll();
   });
@@ -3288,7 +3407,6 @@ function bindGlobalEvents() {
   compassReset.addEventListener("click", () => {
     if (!mapLoaded || !map) return;
     map.easeTo({ bearing: 0, pitch: 0, duration: motionDuration(500) });
-    fitDefaultView(true);
   });
 
   zoomHome.addEventListener("click", () => fitDefaultView(true));
@@ -3334,7 +3452,7 @@ function renderLoading() {
   mobilePlaceSummary.disabled = true;
   mobilePlaceSummaryTitle.textContent = "Loading places";
   mobilePlaceSummaryMeta.textContent = "Preparing the OpenBible data snapshot.";
-  mobilePlaceSummaryAction.textContent = "Details";
+  mobilePlaceSummaryAction.textContent = "Loading";
   detailCard.innerHTML = `
     <p class="section-label">Data</p>
     <h2 class="detail-title">Loading places</h2>
@@ -3370,7 +3488,7 @@ async function boot() {
     mobilePlaceSummary.disabled = true;
     mobilePlaceSummaryTitle.textContent = "Data unavailable";
     mobilePlaceSummaryMeta.textContent = "The OpenBible data snapshot could not load.";
-    mobilePlaceSummaryAction.textContent = "Details";
+    mobilePlaceSummaryAction.textContent = "Unavailable";
     detailCard.innerHTML = `
       <p class="section-label">Data</p>
       <h2 class="detail-title">Data unavailable</h2>
