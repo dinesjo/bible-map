@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#111511">
+  <meta name="theme-color" content="#17201d">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Bible Map">
@@ -19,12 +19,59 @@
   <title>Bible Map | OpenBible biblical geography</title>
 </head>
 <body>
+  <svg class="ui-icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="icon-search" viewBox="0 0 24 24">
+      <circle cx="10.5" cy="10.5" r="6.5"></circle>
+      <path d="m15.5 15.5 4.5 4.5"></path>
+    </symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24">
+      <path d="M7 7l10 10M17 7 7 17"></path>
+    </symbol>
+    <symbol id="icon-list" viewBox="0 0 24 24">
+      <path d="M9 6h11M9 12h11M9 18h11"></path>
+      <circle cx="4.5" cy="6" r="1"></circle>
+      <circle cx="4.5" cy="12" r="1"></circle>
+      <circle cx="4.5" cy="18" r="1"></circle>
+    </symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24">
+      <path d="M12 5v14M5 12h14"></path>
+    </symbol>
+    <symbol id="icon-minus" viewBox="0 0 24 24">
+      <path d="M5 12h14"></path>
+    </symbol>
+    <symbol id="icon-fit" viewBox="0 0 24 24">
+      <path d="M9 5H5v4M15 5h4v4M9 19H5v-4M15 19h4v-4"></path>
+      <circle cx="12" cy="12" r="2.25"></circle>
+    </symbol>
+    <symbol id="icon-arrow-left" viewBox="0 0 24 24">
+      <path d="M20 12H5M10 7l-5 5 5 5"></path>
+    </symbol>
+    <symbol id="icon-arrow-right" viewBox="0 0 24 24">
+      <path d="M4 12h15M14 7l5 5-5 5"></path>
+    </symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24">
+      <path d="m7 9.5 5 5 5-5"></path>
+    </symbol>
+    <symbol id="icon-external" viewBox="0 0 24 24">
+      <path d="M14 5h5v5M19 5l-8 8"></path>
+      <path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"></path>
+    </symbol>
+  </svg>
+
   <main class="page">
     <header class="atlas-bar glass">
       <a class="skip-link" href="#mapStage">Skip to map</a>
       <div class="brand-block">
-        <p class="eyebrow">OpenBible snapshot</p>
-        <h1>Bible Map</h1>
+        <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+          <rect class="brand-mark-frame" x="1" y="1" width="46" height="46" rx="1.5"></rect>
+          <path class="brand-mark-map" d="M8.5 11.5 19 8l10 3.5L39.5 8v28.5L29 40l-10-3.5L8.5 40Z"></path>
+          <path class="brand-mark-fold" d="M19 8v28.5M29 11.5V40"></path>
+          <path class="brand-mark-star" d="m29 16 1.45 4.55L35 22l-4.55 1.45L29 27l-1.45-4.55L23 22l4.55-1.45Z"></path>
+        </svg>
+        <div class="brand-copy">
+          <h1 class="brand-name"><span>Bible</span> <span>Map</span></h1>
+          <p class="brand-tagline">Atlas of the biblical world</p>
+        </div>
       </div>
 
       <div class="route-picker" id="routePicker">
@@ -36,26 +83,28 @@
           aria-expanded="false"
           aria-controls="routeMenu"
         >
+          <span class="control-kicker" aria-hidden="true">Journey guide</span>
           <span id="routePickerText">All places</span>
+          <svg class="ui-icon route-picker-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"></use></svg>
         </button>
         <div class="route-menu" id="routeMenu" role="listbox" aria-label="Choose route guide" hidden></div>
       </div>
 
       <form class="search-shell" id="searchForm" role="search">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M10.5 3.5a7 7 0 1 1 0 14a7 7 0 0 1 0-14Zm0 2a5 5 0 1 0 0 10a5 5 0 0 0 0-10Zm8.9 11.48l1.42 1.42l-2.12 2.12l-1.42-1.42z"/>
-        </svg>
+        <svg class="ui-icon search-icon" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
         <label class="sr-only" for="searchInput">Search places, books, references, or modern locations</label>
         <input
           id="searchInput"
           type="search"
-          placeholder="Search places, books, references, or modern locations"
+          placeholder="Search places, books, or references"
           enterkeyhint="search"
           autocomplete="off"
           autocapitalize="none"
           spellcheck="false"
         >
-        <button class="search-clear-button" id="searchClear" type="button" aria-label="Clear search" hidden>×</button>
+        <button class="search-clear-button" id="searchClear" type="button" aria-label="Clear search" hidden>
+          <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg>
+        </button>
       </form>
 
       <nav class="atlas-actions" aria-label="Map tools">
@@ -73,14 +122,14 @@
       <section class="map-panel glass" aria-labelledby="mapTitle">
         <div class="map-strip">
           <div>
-            <p class="section-label">Map</p>
-            <h2 id="mapTitle">Map</h2>
+            <p class="section-label">Atlas view</p>
+            <h2 id="mapTitle">Known biblical places</h2>
           </div>
           <div class="active-row" id="activeFilters" aria-live="polite"></div>
         </div>
 
         <div class="map-stage" id="mapStage" tabindex="0" aria-label="Interactive map of biblical places">
-          <div id="maplibreMap" aria-hidden="true"></div>
+          <div id="maplibreMap"></div>
           <div class="map-fallback" id="mapFallback">
             <div>
               <strong>The basemap could not load</strong>
@@ -107,12 +156,7 @@
           </button>
 
           <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Open current place list" aria-expanded="false" aria-controls="placesPanel">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M7 6.25h10M7 12h10M7 17.75h10" />
-              <circle cx="4.5" cy="6.25" r="1" />
-              <circle cx="4.5" cy="12" r="1" />
-              <circle cx="4.5" cy="17.75" r="1" />
-            </svg>
+            <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-list"></use></svg>
             <span class="sr-only">Place list</span>
             <strong id="visibleCount">0</strong>
           </button>
@@ -125,16 +169,24 @@
               </div>
               <div class="drawer-head-actions">
                 <span class="small-chip" id="listCounter">0 places</span>
-                <button class="icon-button" id="placesClose" type="button" aria-label="Close place list">×</button>
+                <button class="icon-button" id="placesClose" type="button" aria-label="Close place list">
+                  <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg>
+                </button>
               </div>
             </div>
             <div class="place-list" id="placeList"></div>
           </aside>
 
           <div class="overlay zoom-controls">
-            <button class="zoom-button" id="zoomIn" type="button" aria-label="Zoom in">+</button>
-            <button class="zoom-button" id="zoomOut" type="button" aria-label="Zoom out">−</button>
-            <button class="zoom-button" id="zoomHome" type="button" aria-label="Fit all places">⌂</button>
+            <button class="zoom-button" id="zoomIn" type="button" aria-label="Zoom in">
+              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-plus"></use></svg>
+            </button>
+            <button class="zoom-button" id="zoomOut" type="button" aria-label="Zoom out">
+              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-minus"></use></svg>
+            </button>
+            <button class="zoom-button" id="zoomHome" type="button" aria-label="Fit all places">
+              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-fit"></use></svg>
+            </button>
           </div>
         </div>
       </section>
@@ -154,7 +206,7 @@
           </span>
           <span class="mobile-place-summary-action">
             <span id="mobilePlaceSummaryAction">Details</span>
-            <span class="summary-toggle-icon" aria-hidden="true"></span>
+            <svg class="ui-icon summary-toggle-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"></use></svg>
           </span>
         </button>
         <section class="detail-card" id="detailCard" aria-live="polite"></section>
@@ -166,7 +218,9 @@
             <p class="section-label">Filter places</p>
             <h2 class="drawer-title" id="filterTitle">Filters</h2>
           </div>
-          <button class="icon-button" id="filterClose" type="button" aria-label="Close filters">×</button>
+          <button class="icon-button" id="filterClose" type="button" aria-label="Close filters">
+            <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg>
+          </button>
         </div>
 
         <div class="filter-stack">
@@ -183,7 +237,10 @@
             <div class="filter-row" id="confidenceFilters"></div>
           </div>
           <details class="filter-more">
-            <summary>Place types</summary>
+            <summary>
+              <span>Place types</span>
+              <svg class="ui-icon disclosure-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"></use></svg>
+            </summary>
             <div class="character-grid" id="typeFilters"></div>
           </details>
         </div>
@@ -200,7 +257,9 @@
             <p class="section-label">Data and license</p>
             <h2 class="drawer-title" id="aboutTitle">About the data</h2>
           </div>
-          <button class="icon-button" id="aboutClose" type="button" aria-label="Close data source information">×</button>
+          <button class="icon-button" id="aboutClose" type="button" aria-label="Close data source information">
+            <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg>
+          </button>
         </div>
         <div class="about-content" id="aboutContent"></div>
       </aside>
