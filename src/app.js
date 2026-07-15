@@ -567,14 +567,13 @@ function blurActiveMobileControlIn(container) {
   return blurActiveMobileControl();
 }
 
-function currentViewportHeight() {
-  const viewport = window.visualViewport;
-  return viewport?.height || window.innerHeight;
-}
-
 function syncViewportMetrics() {
-  const height = currentViewportHeight();
-  document.documentElement.style.setProperty("--app-viewport-height", `${Math.round(height)}px`);
+  if (isMobileLayout()) {
+    document.documentElement.style.removeProperty("--app-viewport-height");
+    return;
+  }
+
+  document.documentElement.style.setProperty("--app-viewport-height", `${Math.round(window.innerHeight)}px`);
 }
 
 function clamp(value, min, max) {
@@ -1500,6 +1499,9 @@ function handleViewportChange() {
     setPlaceSheetState("peek", { updateMapPadding: false, animate: false });
   }
   mobileLayoutActive = mobile;
+  if (layoutChanged && state.selectedId) {
+    renderDetails(placeById(state.selectedId), visiblePlacesCache);
+  }
   syncPlaceSheetSummaryState();
   syncPlaceDetailSurface();
   syncMapGestureMode();
@@ -2334,7 +2336,8 @@ function renderDetails(place, visiblePlaces) {
   const openBibleScore = openBibleScoreLine(place);
   const openBibleLocationRecords = openBibleLocationRecordsLine(place);
   const openBibleScoringVotes = openBibleScoringVotesLine(place);
-  const compactReferences = isMobileLayout();
+  const mobileLayout = isMobileLayout();
+  const compactReferences = mobileLayout;
   const distributionOpen = referenceSummary.total && !compactReferences ? "open" : "";
   const currentIndex = visiblePlaces.findIndex((item) => item.id === place.id);
   const canNavigateVisible = currentIndex >= 0 && visiblePlaces.length > 1;
@@ -2343,28 +2346,16 @@ function renderDetails(place, visiblePlaces) {
   const positionText = currentIndex >= 0
     ? `${formatNumber(currentIndex + 1)} of ${formatNumber(visiblePlaces.length)} visible`
     : `${formatNumber(visiblePlaces.length)} visible`;
-  const centerMapAction = isMobileLayout()
+  const centerMapAction = mobileLayout
     ? ""
     : `<button class="ghost-button" id="detailFocusButton" type="button" aria-label="Center map on ${escapeHtml(accessiblePlaceName(place))}">Center map</button>`;
-
-  detailCard.innerHTML = `
-    <p class="section-label">Selected place</p>
-    <div class="detail-head">
-      <div class="detail-subtitle">
-        <h2 class="detail-title">${escapeHtml(displayName)}</h2>
-        ${variantChip}
-        <span class="detail-region">${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(modernName)}</span>
-      </div>
-      ${routeNote}
-    </div>
-    <p class="detail-summary">
-      OpenBible maps this biblical place to <strong>${escapeHtml(candidateText)}</strong>.
-      The confidence band is <strong>${escapeHtml(confidenceLabel(place.confidence))}</strong>.
-    </p>
+  const detailActionsMarkup = `
     <div class="detail-actions">
       ${centerMapAction}
       ${externalLinkMarkup("View source record", place.links.openBible, "ghost-button detail-action-link")}
     </div>
+  `;
+  const visiblePlaceNavMarkup = `
     <nav class="visible-place-nav" aria-label="Browse visible places">
       <button
         class="visible-nav-button"
@@ -2388,6 +2379,24 @@ function renderDetails(place, visiblePlaces) {
         ${iconMarkup("arrow-right", "nav-arrow")}
       </button>
     </nav>
+  `;
+
+  detailCard.innerHTML = `
+    <p class="section-label">Selected place</p>
+    <div class="detail-head">
+      <div class="detail-subtitle">
+        <h2 class="detail-title">${escapeHtml(displayName)}</h2>
+        ${variantChip}
+        <span class="detail-region">${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(modernName)}</span>
+      </div>
+      ${routeNote}
+    </div>
+    <p class="detail-summary">
+      OpenBible maps this biblical place to <strong>${escapeHtml(candidateText)}</strong>.
+      The confidence band is <strong>${escapeHtml(confidenceLabel(place.confidence))}</strong>.
+    </p>
+    ${mobileLayout ? "" : detailActionsMarkup}
+    ${mobileLayout ? "" : visiblePlaceNavMarkup}
     ${renderDetailTabs(activeTab)}
     <section
       class="detail-tab-panel"
@@ -2531,6 +2540,12 @@ function renderDetails(place, visiblePlaces) {
         <p class="detail-source-note">Place data imported from OpenBible.info Bible Geocoding Data, ${escapeHtml(sourceMeta.license)}. Markup has been stripped and the record has been reshaped for this app.</p>
       </section>
     </section>
+    ${mobileLayout ? `
+      <footer class="mobile-detail-footer">
+        ${detailActionsMarkup}
+        ${visiblePlaceNavMarkup}
+      </footer>
+    ` : ""}
   `;
 
   if (shouldResetScroll) resetDetailScroll();
@@ -3249,8 +3264,6 @@ function bindGlobalEvents() {
   syncMobileOverlayPlacement();
   window.addEventListener("resize", scheduleViewportChange);
   window.addEventListener("popstate", handleOverlayPopState);
-  window.visualViewport?.addEventListener("resize", scheduleViewportChange, { passive: true });
-  window.visualViewport?.addEventListener("scroll", scheduleViewportChange, { passive: true });
 
   miniCard.addEventListener("click", revealSelectedDetails);
   mobilePlaceSummary.addEventListener("click", () => {

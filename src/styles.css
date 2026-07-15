@@ -494,6 +494,10 @@ summary:focus-visible,
   min-width: 96px;
 }
 
+.source-button .source-button-icon {
+  display: none;
+}
+
 .atlas-workspace {
   position: relative;
   display: grid;
@@ -682,6 +686,10 @@ summary:focus-visible,
 
 #maplibreMap .maplibregl-ctrl-attrib a {
   color: #f0cc8d;
+}
+
+#maplibreMap .maplibregl-ctrl-attrib-button {
+  background-repeat: no-repeat;
 }
 
 .map-fallback {
@@ -3092,23 +3100,13 @@ a[target="_blank"]:not(.external-link)::after {
   }
 
   .source-button span {
-    width: 26px;
-    height: 26px;
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    border: 1px solid rgba(50, 45, 34, 0.25);
-    border-radius: 999px;
-    font-size: 0;
+    display: none;
   }
 
-  .source-button span::before {
-    content: "i";
-    font-family: var(--font-serif);
-    font-size: 1rem;
-    font-style: italic;
-    font-weight: 700;
-    line-height: 1;
+  .source-button .source-button-icon {
+    width: 20px;
+    height: 20px;
+    display: block;
   }
 
   .route-picker {
@@ -6111,15 +6109,13 @@ details[open] > summary .disclosure-icon {
   }
 
   .source-button span {
-    font-size: 0;
+    display: none;
   }
 
-  .source-button span::before {
-    content: "i";
-    font-family: var(--font-serif);
-    font-size: 1rem;
-    font-style: italic;
-    font-weight: 700;
+  .source-button .source-button-icon {
+    width: 20px;
+    height: 20px;
+    display: block;
   }
 
   .route-picker {
@@ -6313,6 +6309,7 @@ details[open] > summary .disclosure-icon {
     height: 44px;
     border-radius: 11px;
     background-color: rgba(241, 234, 220, 0.9);
+    background-repeat: no-repeat;
     background-position: center;
     background-size: 24px 24px;
   }
@@ -6471,6 +6468,7 @@ details[open] > summary .disclosure-icon {
     height: 44px;
     border-radius: 11px;
     background-color: rgba(241, 234, 220, 0.9);
+    background-repeat: no-repeat;
     background-position: center;
     background-size: 24px 24px;
   }
@@ -6496,5 +6494,35 @@ details[open] > summary .disclosure-icon {
     height: var(--mobile-place-dock);
     min-height: var(--mobile-place-dock);
     border-radius: inherit;
+  }
+}
+
+@media (max-width: 760px), (min-width: 761px) and (max-width: 950px) and (max-height: 500px) {
+  .inspector-panel[data-sheet-state="full"] .detail-card {
+    padding-top: 0;
+    row-gap: 0;
+    scroll-padding-top: 0;
+  }
+
+  .inspector-panel[data-sheet-state="full"] .detail-card > .section-label,
+  .inspector-panel[data-sheet-state="full"] .detail-card > .detail-head,
+  .inspector-panel[data-sheet-state="full"] .detail-card > .detail-summary {
+    display: none;
+  }
+
+  .inspector-panel[data-sheet-state="full"] .detail-tabs {
+    margin: 0 -14px;
+    padding-inline: 14px;
+    background: var(--paper);
+  }
+
+  .inspector-panel[data-sheet-state="full"] .detail-tab-panel {
+    padding-top: 14px;
+  }
+
+  .mobile-detail-footer {
+    display: grid;
+    gap: 10px;
+    padding-top: 18px;
   }
 }

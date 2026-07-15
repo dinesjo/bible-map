@@ -56,6 +56,10 @@
       <path d="M14 5h5v5M19 5l-8 8"></path>
       <path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"></path>
     </symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8.5"></circle>
+      <path d="M12 10.5v5M12 7.5h.01"></path>
+    </symbol>
   </svg>
 
   <main class="page">
@@ -112,7 +116,8 @@
           <span>Filters</span>
           <strong id="activeFilterCount">0</strong>
         </button>
-        <button class="tool-button source-button" id="aboutToggle" type="button" aria-expanded="false" aria-controls="aboutPanel">
+        <button class="tool-button source-button" id="aboutToggle" type="button" aria-label="About the data" aria-expanded="false" aria-controls="aboutPanel">
+          <svg class="ui-icon source-button-icon" aria-hidden="true" focusable="false"><use href="#icon-info"></use></svg>
           <span>About</span>
         </button>
       </nav>
