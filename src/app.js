@@ -44,9 +44,6 @@ const SCROLL_EDGE_THRESHOLD = 3;
 const DISMISS_DRAG_ACTIVATION = 8;
 const DISMISS_DRAG_DISTANCE = 92;
 const DISMISS_DRAG_VELOCITY = 0.62;
-const TAB_SWIPE_ACTIVATION = 16;
-const TAB_SWIPE_DISTANCE = 64;
-const TAB_SWIPE_VERTICAL_CANCEL = 34;
 const MOBILE_PLACE_DOCK_HEIGHT = 76;
 const scrollEdgeConfigs = [
   { selector: ".filter-stack", axis: "y" },
@@ -115,6 +112,9 @@ const placesBackdropAnchor = document.createComment("places-backdrop-anchor");
 const inspectorPanelAnchor = document.createComment("inspector-panel-anchor");
 const placeDetailScrimAnchor = document.createComment("place-detail-scrim-anchor");
 const routeMenuAnchor = document.createComment("route-menu-anchor");
+const filterPanelAnchor = document.createComment("filter-panel-anchor");
+const aboutPanelAnchor = document.createComment("about-panel-anchor");
+const drawerScrimAnchor = document.createComment("drawer-scrim-anchor");
 const sheetModalSiblings = [
   document.querySelector(".atlas-bar"),
   document.querySelector(".map-panel"),
@@ -153,7 +153,6 @@ let detailScrollPositions = new Map();
 let placeListRenderKey = "";
 let placeListObserver = null;
 let dismissDrag = null;
-let tabSwipe = null;
 let viewportUpdateFrame = 0;
 let scrollEdgeResizeObserver = null;
 let overlayHistoryActive = false;
@@ -178,6 +177,9 @@ placesBackdrop.before(placesBackdropAnchor);
 inspectorPanel.before(inspectorPanelAnchor);
 placeDetailScrim.before(placeDetailScrimAnchor);
 routeMenu.before(routeMenuAnchor);
+filterPanel.before(filterPanelAnchor);
+aboutPanel.before(aboutPanelAnchor);
+drawerScrim.before(drawerScrimAnchor);
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -371,6 +373,7 @@ function getVisiblePlaces() {
 }
 
 function normalizeSelection(visiblePlaces) {
+  if (state.selectedId === null) return;
   if (visiblePlaces.some((place) => place.id === state.selectedId)) return;
   if (isMobileLayout()) {
     rememberDetailScroll();
@@ -621,15 +624,6 @@ function restoreDetailScroll(placeId = detailPlaceId, tab = state.detailTab) {
     syncDetailScrollState();
   });
   return true;
-}
-
-function anchorDetailTabsAfterRender() {
-  if (!isMobileLayout()) return;
-  const tabs = detailCard.querySelector(".detail-tabs");
-  if (!tabs) return;
-  const maxScroll = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
-  detailCard.scrollTop = clamp(tabs.offsetTop, 0, maxScroll);
-  syncDetailScrollState();
 }
 
 function keepFocusedDetailControlVisible(control) {
@@ -1049,21 +1043,52 @@ function setDetailTab(
   tab,
   place = placeById(state.selectedId),
   visiblePlaces = visiblePlacesCache,
-  { anchorOnMobile = true, restoreFocus = false } = {}
+  { restoreFocus = false } = {}
 ) {
   if (!detailTabs.includes(tab) || !place) return false;
   const previousInspectorScrollTop = inspectorPanel.scrollTop;
   const previousTab = state.detailTab;
   const changedTab = state.detailTab !== tab;
+  if (!changedTab) {
+    if (restoreFocus) focusRenderedDetailTab(tab, previousInspectorScrollTop);
+    return false;
+  }
+
   if (changedTab) rememberDetailScroll(place.id, previousTab);
   state.detailTab = tab;
   if (tab === "references" && state.referenceLimit < REFERENCE_PAGE_SIZE) {
     state.referenceLimit = REFERENCE_PAGE_SIZE;
   }
-  renderDetails(place, visiblePlaces);
-  if (changedTab && anchorOnMobile && isMobileLayout() && !restoreDetailScroll(place.id, tab)) {
-    requestAnimationFrame(anchorDetailTabsAfterRender);
+
+  const tabList = detailCard.querySelector(".detail-tabs");
+  const renderedTabs = [...detailCard.querySelectorAll("[role='tab'][data-detail-tab]")];
+  const renderedPanels = [...detailCard.querySelectorAll("[role='tabpanel']")];
+  const canUpdateInPlace = detailPlaceId === place.id
+    && tabList
+    && renderedTabs.length === detailTabs.length
+    && renderedPanels.length === detailTabs.length;
+
+  if (!canUpdateInPlace) {
+    renderDetails(place, visiblePlaces);
+  } else {
+    const previousDetailScrollTop = detailCard.scrollTop;
+
+    renderedTabs.forEach((button) => {
+      const active = button.dataset.detailTab === tab;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+    });
+    renderedPanels.forEach((panel) => {
+      panel.hidden = panel.id !== `detail-panel-${tab}`;
+    });
+
+    const maxScrollAfter = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
+    detailCard.scrollTop = clamp(previousDetailScrollTop, 0, maxScrollAfter);
+    syncDetailScrollState();
+    requestAnimationFrame(syncDetailScrollState);
   }
+
   if (restoreFocus) focusRenderedDetailTab(tab, previousInspectorScrollTop);
   return changedTab;
 }
@@ -1084,82 +1109,6 @@ function handleDetailTabKeydown(event, place, visiblePlaces) {
   const nextTab = detailTabs[nextIndex];
   if (nextTab === tab) return;
   setDetailTab(nextTab, place, visiblePlaces, { restoreFocus: true });
-}
-
-function switchDetailTabByOffset(direction) {
-  const place = placeById(state.selectedId);
-  if (!place) return false;
-  const activeTab = detailTabs.includes(state.detailTab) ? state.detailTab : "overview";
-  const activeIndex = detailTabs.indexOf(activeTab);
-  const nextIndex = clamp(activeIndex + direction, 0, detailTabs.length - 1);
-  if (nextIndex === activeIndex) return false;
-  return setDetailTab(detailTabs[nextIndex], place, visiblePlacesCache);
-}
-
-function clearDetailTabSwipe() {
-  tabSwipe = null;
-  detailCard.classList.remove("is-tab-swiping");
-  detailCard.style.removeProperty("--tab-swipe-offset");
-}
-
-function beginDetailTabSwipe(event) {
-  if (!isMobileLayout() || openDrawer || state.placeSheet === "peek" || event.button > 0 || tabSwipe) return;
-  if (event.target instanceof Element && event.target.closest(dragExcludedSelector)) return;
-  if (!placeById(state.selectedId)) return;
-
-  tabSwipe = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    currentDelta: 0,
-    active: false
-  };
-}
-
-function activateDetailTabSwipe(event) {
-  if (!tabSwipe || tabSwipe.active) return Boolean(tabSwipe);
-
-  const deltaX = event.clientX - tabSwipe.startX;
-  const deltaY = event.clientY - tabSwipe.startY;
-  const absX = Math.abs(deltaX);
-  const absY = Math.abs(deltaY);
-
-  if (absY > TAB_SWIPE_VERTICAL_CANCEL && absY > absX) {
-    clearDetailTabSwipe();
-    return false;
-  }
-
-  if (absX < TAB_SWIPE_ACTIVATION || absX < absY * 1.25) return false;
-
-  tabSwipe.active = true;
-  detailCard.classList.add("is-tab-swiping");
-  return true;
-}
-
-function moveDetailTabSwipe(event) {
-  if (!tabSwipe || event.pointerId !== tabSwipe.pointerId) return;
-  if (!activateDetailTabSwipe(event)) return;
-
-  const deltaX = event.clientX - tabSwipe.startX;
-  const activeTab = detailTabs.includes(state.detailTab) ? state.detailTab : "overview";
-  const activeIndex = detailTabs.indexOf(activeTab);
-  const hasPrevious = activeIndex > 0;
-  const hasNext = activeIndex < detailTabs.length - 1;
-  const hasTarget = deltaX > 0 ? hasPrevious : hasNext;
-  const dampedDelta = deltaX * (hasTarget ? 0.22 : 0.08);
-  tabSwipe.currentDelta = deltaX;
-  detailCard.style.setProperty("--tab-swipe-offset", `${Math.round(clamp(dampedDelta, -22, 22))}px`);
-  event.preventDefault();
-}
-
-function endDetailTabSwipe(event) {
-  if (!tabSwipe || event.pointerId !== tabSwipe.pointerId) return;
-
-  const deltaX = tabSwipe.currentDelta;
-  const shouldSwitch = tabSwipe.active && Math.abs(deltaX) >= TAB_SWIPE_DISTANCE;
-  const direction = deltaX < 0 ? 1 : -1;
-  clearDetailTabSwipe();
-  if (shouldSwitch) switchDetailTabByOffset(direction);
 }
 
 function fitDefaultView(animated = false) {
@@ -1214,7 +1163,9 @@ function selectPlaceFromDetailNav(placeId, preferredFocusId) {
   requestAnimationFrame(() => {
     const preferredTarget = document.getElementById(preferredFocusId);
     const fallbackTarget = document.getElementById("detailFocusButton");
-    const focusTarget = preferredTarget && !preferredTarget.disabled ? preferredTarget : fallbackTarget;
+    const focusTarget = preferredTarget && !preferredTarget.disabled
+      ? preferredTarget
+      : fallbackTarget || mobilePlaceSummary;
     focusTarget?.focus({ preventScroll: true });
   });
 }
@@ -1258,6 +1209,18 @@ function selectPlace(id, { focusMap = false, revealSheet = false } = {}) {
   if (focusMap) focusOnLocations([id], true);
 }
 
+function clearPlaceSelection() {
+  if (!hasSelectedPlace()) return false;
+  rememberDetailScroll();
+  state.selectedId = null;
+  state.placeSheet = "peek";
+  renderAll();
+  if (mapLoaded && map) {
+    map.easeTo({ padding: mapViewPadding(), duration: motionDuration(180) });
+  }
+  return true;
+}
+
 function selectPlaceFromList(id) {
   closeDrawers();
   selectPlace(id, { focusMap: true, revealSheet: true });
@@ -1275,6 +1238,9 @@ function restoreAnchoredElement(element, anchor) {
 
 function syncMobileOverlayPlacement() {
   if (isMobileLayout()) {
+    if (drawerScrim.parentNode !== document.body) document.body.append(drawerScrim);
+    if (filterPanel.parentNode !== document.body) document.body.append(filterPanel);
+    if (aboutPanel.parentNode !== document.body) document.body.append(aboutPanel);
     if (placeDetailScrim.parentNode !== document.body) document.body.append(placeDetailScrim);
     if (inspectorPanel.parentNode !== document.body) document.body.append(inspectorPanel);
     if (placesBackdrop.parentNode !== document.body) document.body.append(placesBackdrop);
@@ -1288,6 +1254,9 @@ function syncMobileOverlayPlacement() {
   restoreAnchoredElement(placesBackdrop, placesBackdropAnchor);
   restoreAnchoredElement(placesPanel, placesPanelAnchor);
   restoreAnchoredElement(routeMenu, routeMenuAnchor);
+  restoreAnchoredElement(filterPanel, filterPanelAnchor);
+  restoreAnchoredElement(aboutPanel, aboutPanelAnchor);
+  restoreAnchoredElement(drawerScrim, drawerScrimAnchor);
 }
 
 function syncOverlayInert() {
@@ -1527,12 +1496,6 @@ function handleViewportChange() {
   const mobile = isMobileLayout();
   const layoutChanged = mobile !== mobileLayoutActive;
   syncMobileOverlayPlacement();
-  if (mobileLayoutActive && !mobile && !hasSelectedPlace() && placesById.size) {
-    state.selectedId = placesById.has(DEFAULT_SELECTED_PLACE_ID)
-      ? DEFAULT_SELECTED_PLACE_ID
-      : allPlaces[0]?.id || null;
-    renderAll();
-  }
   if (!mobile && state.placeSheet !== "peek") {
     setPlaceSheetState("peek", { updateMapPadding: false, animate: false });
   }
@@ -2320,10 +2283,15 @@ function renderDetails(place, visiblePlaces) {
   const shouldResetScroll = ensureDetailState(place);
 
   if (!place) {
+    const hasVisiblePlaces = visiblePlaces.length > 0;
     detailCard.innerHTML = `
       <p class="section-label">Selected place</p>
-      <h2 class="detail-title">No places found</h2>
-      <div class="empty-state">Adjust the filters or clear search to see mapped OpenBible places.</div>
+      <h2 class="detail-title">${hasVisiblePlaces ? "Select a place" : "No places found"}</h2>
+      <div class="empty-state">
+        ${hasVisiblePlaces
+          ? "Choose a marker on the map or open the place list to inspect its references and identification."
+          : "Adjust the filters or clear search to see mapped OpenBible places."}
+      </div>
     `;
     if (shouldResetScroll) resetDetailScroll();
     return;
@@ -2375,6 +2343,9 @@ function renderDetails(place, visiblePlaces) {
   const positionText = currentIndex >= 0
     ? `${formatNumber(currentIndex + 1)} of ${formatNumber(visiblePlaces.length)} visible`
     : `${formatNumber(visiblePlaces.length)} visible`;
+  const centerMapAction = isMobileLayout()
+    ? ""
+    : `<button class="ghost-button" id="detailFocusButton" type="button" aria-label="Center map on ${escapeHtml(accessiblePlaceName(place))}">Center map</button>`;
 
   detailCard.innerHTML = `
     <p class="section-label">Selected place</p>
@@ -2391,7 +2362,7 @@ function renderDetails(place, visiblePlaces) {
       The confidence band is <strong>${escapeHtml(confidenceLabel(place.confidence))}</strong>.
     </p>
     <div class="detail-actions">
-      <button class="ghost-button" id="detailFocusButton" type="button" aria-label="Center map on ${escapeHtml(accessiblePlaceName(place))}">Center map</button>
+      ${centerMapAction}
       ${externalLinkMarkup("View source record", place.links.openBible, "ghost-button detail-action-link")}
     </div>
     <nav class="visible-place-nav" aria-label="Browse visible places">
@@ -2564,7 +2535,7 @@ function renderDetails(place, visiblePlaces) {
 
   if (shouldResetScroll) resetDetailScroll();
 
-  document.getElementById("detailFocusButton").addEventListener("click", () => centerPlaceFromDetails(place.id));
+  document.getElementById("detailFocusButton")?.addEventListener("click", () => centerPlaceFromDetails(place.id));
   document.getElementById("detailPreviousButton").addEventListener("click", () => {
     if (!previousPlace) return;
     selectPlaceFromDetailNav(previousPlace.id, "detailPreviousButton");
@@ -2577,7 +2548,7 @@ function renderDetails(place, visiblePlaces) {
   detailCard.querySelectorAll("[data-detail-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       const tab = button.dataset.detailTab;
-      setDetailTab(tab, place, visiblePlaces, { restoreFocus: true });
+      setDetailTab(tab, place, visiblePlaces, { restoreFocus: !button.matches("[role='tab']") });
     });
     if (button.matches("[role='tab']")) {
       button.addEventListener("keydown", (event) => handleDetailTabKeydown(event, place, visiblePlaces));
@@ -3013,6 +2984,20 @@ function ensurePlaceLayers() {
     selectPlace(feature.properties.id, { revealSheet: true });
   });
 
+  map.on("click", (event) => {
+    const originalTarget = event.originalEvent?.target;
+    const interactiveSelector = "a, button, input, select, summary, textarea, [role='button'], .maplibregl-control-container";
+    const interactiveTarget = originalTarget instanceof Element && originalTarget.closest(interactiveSelector);
+    const clientX = event.originalEvent?.clientX;
+    const clientY = event.originalEvent?.clientY;
+    const interactiveAtPoint = Number.isFinite(clientX) && Number.isFinite(clientY)
+      && document.elementsFromPoint(clientX, clientY).some((element) => element.closest(interactiveSelector));
+    if (interactiveTarget || interactiveAtPoint) return;
+    const hitFeatures = map.queryRenderedFeatures(event.point, { layers: [HIT_LAYER_ID] });
+    if (hitFeatures.length) return;
+    clearPlaceSelection();
+  });
+
   [HIT_LAYER_ID].forEach((layerId) => {
     map.on("mouseenter", layerId, () => {
       map.getCanvas().style.cursor = "pointer";
@@ -3272,15 +3257,11 @@ function bindGlobalEvents() {
     if (!isMobileLayout() || mobilePlaceSummary.disabled) return;
     cyclePlaceSheetState();
   });
-  detailCard.addEventListener("pointerdown", beginDetailTabSwipe);
   detailCard.addEventListener("focusin", handleDetailFocusIn);
   detailCard.addEventListener("scroll", syncDetailScrollState, { passive: true });
   document.addEventListener("pointermove", moveDismissDrag);
-  document.addEventListener("pointermove", moveDetailTabSwipe);
   document.addEventListener("pointerup", endDismissDrag);
-  document.addEventListener("pointerup", endDetailTabSwipe);
   document.addEventListener("pointercancel", endDismissDrag);
-  document.addEventListener("pointercancel", endDetailTabSwipe);
 
   filterToggle.addEventListener("click", () => {
     setDrawer("filters", openDrawer !== "filters");
