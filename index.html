@@ -96,7 +96,7 @@
         <input
           id="searchInput"
           type="search"
-          placeholder="Search places, books, or references"
+          placeholder="Search places"
           enterkeyhint="search"
           autocomplete="off"
           autocapitalize="none"
@@ -113,7 +113,7 @@
           <strong id="activeFilterCount">0</strong>
         </button>
         <button class="tool-button source-button" id="aboutToggle" type="button" aria-expanded="false" aria-controls="aboutPanel">
-          <span>Data source</span>
+          <span>About</span>
         </button>
       </nav>
     </header>
@@ -157,6 +157,7 @@
 
           <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Open current place list" aria-expanded="false" aria-controls="placesPanel">
             <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-list"></use></svg>
+            <span class="map-places-label" aria-hidden="true">Places</span>
             <span class="sr-only">Place list</span>
             <strong id="visibleCount">0</strong>
           </button>
@@ -174,6 +175,22 @@
                 </button>
               </div>
             </div>
+            <form class="search-shell places-search-shell" id="placesSearchForm" role="search">
+              <svg class="ui-icon search-icon" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
+              <label class="sr-only" for="placesSearchInput">Search the current place list</label>
+              <input
+                id="placesSearchInput"
+                type="search"
+                placeholder="Search current places"
+                enterkeyhint="search"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+              >
+              <button class="search-clear-button" id="placesSearchClear" type="button" aria-label="Clear place search" hidden>
+                <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg>
+              </button>
+            </form>
             <div class="place-list" id="placeList"></div>
           </aside>
 
@@ -209,8 +226,16 @@
             <svg class="ui-icon summary-toggle-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"></use></svg>
           </span>
         </button>
-        <section class="detail-card" id="detailCard" aria-live="polite"></section>
+        <section class="detail-card" id="detailCard"></section>
       </aside>
+
+      <button
+        class="place-detail-scrim"
+        id="placeDetailScrim"
+        type="button"
+        aria-label="Back to map"
+        hidden
+      ></button>
 
       <aside class="drawer-panel filter-panel glass" id="filterPanel" role="dialog" aria-modal="false" aria-labelledby="filterTitle" aria-hidden="true">
         <div class="drawer-head">
