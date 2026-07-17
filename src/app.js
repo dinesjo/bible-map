@@ -3173,7 +3173,8 @@ function ensurePlaceLayers() {
       "text-offset": [0, 1.1],
       "text-anchor": "top",
       "text-optional": true,
-      "symbol-sort-key": ["get", "labelPriority"],
+      // MapLibre places lower sort keys first when labels cannot overlap.
+      "symbol-sort-key": ["-", 0, ["get", "labelPriority"]],
       "text-allow-overlap": false,
       "text-ignore-placement": false,
       "text-font": ["Noto Sans Regular"]
@@ -3474,6 +3475,7 @@ function initializeMap() {
     }
   });
   configureMapAccessibility();
+  map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-left");
   syncMapGestureMode();
 
   map.on("load", () => {

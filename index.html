@@ -167,6 +167,33 @@
             <strong id="visibleCount">0</strong>
           </button>
 
+          <details class="overlay map-legend" aria-label="Map key">
+            <summary>
+              <span class="legend-summary-dots" aria-hidden="true">
+                <i class="legend-dot is-high"></i>
+                <i class="legend-dot is-medium"></i>
+                <i class="legend-dot is-low"></i>
+                <i class="legend-dot is-unknown"></i>
+              </span>
+              <span>Map key</span>
+              <svg class="ui-icon disclosure-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"></use></svg>
+            </summary>
+            <div class="map-legend-body">
+              <p>Marker color shows mapped-location confidence.</p>
+              <ul>
+                <li><i class="legend-dot is-high"></i><span>High <small>500+</small></span></li>
+                <li><i class="legend-dot is-medium"></i><span>Medium <small>200–499</small></span></li>
+                <li><i class="legend-dot is-low"></i><span>Low <small>1–199</small></span></li>
+                <li><i class="legend-dot is-unknown"></i><span>Unknown <small>0 or below</small></span></li>
+              </ul>
+              <div class="legend-stack-row">
+                <i class="legend-stack-marker" aria-hidden="true">12</i>
+                <span>A number means several visible records share that exact point. Select it to choose a place.</span>
+              </div>
+              <p class="legend-caveat">Some points represent a settlement, area, region, or path. See Evidence for the marker's role.</p>
+            </div>
+          </details>
+
           <aside class="overlay map-places-panel glass" id="placesPanel" role="dialog" aria-modal="false" aria-labelledby="placesTitle" aria-hidden="true">
             <div class="drawer-head">
               <div>
