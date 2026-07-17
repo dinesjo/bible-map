@@ -821,7 +821,13 @@ function urlForCurrentState({ clean = false, includeImplicitPlace = false } = {}
   URL_STATE_PARAMS.forEach((parameter) => url.searchParams.delete(parameter));
   url.hash = "";
 
-  if (state.selectedId && placesById.has(state.selectedId) && (includeImplicitPlace || selectedPlaceUrlActive)) {
+  const hasShareableDetailTab = state.detailTab !== "overview" && detailTabs.includes(state.detailTab);
+  const serializePlace = Boolean(
+    state.selectedId
+    && placesById.has(state.selectedId)
+    && (includeImplicitPlace || selectedPlaceUrlActive || hasShareableDetailTab)
+  );
+  if (serializePlace) {
     url.searchParams.set("place", state.selectedId);
   }
   if (state.route && storyRoutes.some((route) => route.id === state.route)) {
@@ -833,7 +839,7 @@ function urlForCurrentState({ clean = false, includeImplicitPlace = false } = {}
   if (state.book !== "all") url.searchParams.set("book", state.book);
   if (state.confidence !== "all") url.searchParams.set("confidence", state.confidence);
   if (state.type !== "all") url.searchParams.set("type", state.type);
-  if (state.selectedId && state.detailTab !== "overview" && detailTabs.includes(state.detailTab)) {
+  if (serializePlace && hasShareableDetailTab) {
     url.searchParams.set("tab", state.detailTab);
   }
   return url;
