@@ -60,6 +60,11 @@
       <circle cx="12" cy="12" r="8.5"></circle>
       <path d="M12 10.5v5M12 7.5h.01"></path>
     </symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24">
+      <path d="M9.5 14.5l5-5"></path>
+      <path d="M7.25 16.75l-1 1a3 3 0 0 1-4.25-4.25l3.25-3.25a3 3 0 0 1 4.25 0"></path>
+      <path d="M16.75 7.25l1-1A3 3 0 0 1 22 10.5l-3.25 3.25a3 3 0 0 1-4.25 0"></path>
+    </symbol>
   </svg>
 
   <main class="page">
@@ -116,10 +121,15 @@
           <span>Filters</span>
           <strong id="activeFilterCount">0</strong>
         </button>
+        <button class="tool-button source-button share-button" id="shareButton" type="button" aria-label="Copy link to current map view">
+          <svg class="ui-icon source-button-icon" aria-hidden="true" focusable="false"><use href="#icon-link"></use></svg>
+          <span id="shareButtonText">Share</span>
+        </button>
         <button class="tool-button source-button" id="aboutToggle" type="button" aria-label="About the data" aria-expanded="false" aria-controls="aboutPanel">
           <svg class="ui-icon source-button-icon" aria-hidden="true" focusable="false"><use href="#icon-info"></use></svg>
           <span>About</span>
         </button>
+        <span class="sr-only" id="shareStatus" role="status" aria-live="polite"></span>
       </nav>
     </header>
 

@@ -51,6 +51,7 @@ const DISMISS_DRAG_ACTIVATION = 8;
 const DISMISS_DRAG_DISTANCE = 92;
 const DISMISS_DRAG_VELOCITY = 0.62;
 const MOBILE_PLACE_DOCK_HEIGHT = 76;
+const URL_STATE_PARAMS = ["place", "route", "q", "testament", "book", "confidence", "type", "tab"];
 const scrollEdgeConfigs = [
   { selector: ".filter-stack", axis: "y" },
   { selector: ".book-row", axis: "y" },
@@ -109,6 +110,9 @@ const aboutToggle = document.getElementById("aboutToggle");
 const aboutPanel = document.getElementById("aboutPanel");
 const aboutClose = document.getElementById("aboutClose");
 const aboutContent = document.getElementById("aboutContent");
+const shareButton = document.getElementById("shareButton");
+const shareButtonText = document.getElementById("shareButtonText");
+const shareStatus = document.getElementById("shareStatus");
 const drawerScrim = document.getElementById("drawerScrim");
 const placeDetailScrim = document.getElementById("placeDetailScrim");
 const inspectorPanel = document.getElementById("inspectorPanel");
@@ -170,6 +174,12 @@ let overlayHistoryReleasePending = false;
 let overlayHistorySyncPaused = false;
 let closingOverlayFromHistory = false;
 let suppressNextOverlayPop = false;
+let pendingUrlMode = null;
+let restoringUrlState = false;
+let urlStateReady = false;
+let urlFramePending = false;
+let selectedPlaceUrlActive = false;
+let shareFeedbackTimer = 0;
 let mobileLayoutActive = isMobileLayout();
 const dragExcludedSelector = [
   "a",
@@ -804,6 +814,189 @@ function mapViewPadding() {
   };
 }
 
+function urlForCurrentState({ clean = false, includeImplicitPlace = false } = {}) {
+  const url = clean
+    ? new URL(window.location.pathname, window.location.origin)
+    : new URL(window.location.href);
+  URL_STATE_PARAMS.forEach((parameter) => url.searchParams.delete(parameter));
+  url.hash = "";
+
+  if (state.selectedId && placesById.has(state.selectedId) && (includeImplicitPlace || selectedPlaceUrlActive)) {
+    url.searchParams.set("place", state.selectedId);
+  }
+  if (state.route && storyRoutes.some((route) => route.id === state.route)) {
+    url.searchParams.set("route", state.route);
+  }
+  const search = state.search.trim().slice(0, 160);
+  if (search) url.searchParams.set("q", search);
+  if (state.testament !== "all") url.searchParams.set("testament", state.testament);
+  if (state.book !== "all") url.searchParams.set("book", state.book);
+  if (state.confidence !== "all") url.searchParams.set("confidence", state.confidence);
+  if (state.type !== "all") url.searchParams.set("type", state.type);
+  if (state.selectedId && state.detailTab !== "overview" && detailTabs.includes(state.detailTab)) {
+    url.searchParams.set("tab", state.detailTab);
+  }
+  return url;
+}
+
+function durableHistoryState(extra = {}) {
+  const nextState = { ...currentHistoryState() };
+  delete nextState.bibleMapOverlay;
+  return { ...nextState, bibleMapView: true, ...extra };
+}
+
+function flushPendingUrlSync() {
+  if (!urlStateReady || restoringUrlState || overlayHistoryReleasePending || !pendingUrlMode) return;
+  const requestedMode = pendingUrlMode;
+  pendingUrlMode = null;
+  const url = urlForCurrentState();
+  const mode = requestedMode === "push" && url.href !== window.location.href ? "push" : "replace";
+
+  try {
+    window.history[`${mode}State`](durableHistoryState(), "", url.href);
+  } catch {
+    // URL state is an enhancement; the app remains usable if history writes are unavailable.
+  }
+}
+
+function requestUrlSync(mode = "replace") {
+  if (!urlStateReady || restoringUrlState) return;
+  pendingUrlMode = pendingUrlMode === "push" || mode === "push" ? "push" : "replace";
+
+  if (overlayHistoryActive && isOverlayHistoryState() && !overlayHistoryReleasePending) {
+    try {
+      window.history.replaceState(
+        durableHistoryState({ bibleMapOverlay: true }),
+        "",
+        urlForCurrentState().href
+      );
+    } catch {
+      // Keep the pending durable write for when the overlay entry is released.
+    }
+    return;
+  }
+
+  flushPendingUrlSync();
+}
+
+function frameCurrentUrlState(animated = false) {
+  if (!mapLoaded || !map) {
+    urlFramePending = true;
+    return;
+  }
+
+  const route = getActiveRoute();
+  if (route) {
+    const visibleIds = new Set(visiblePlacesCache.map((place) => place.id));
+    const routeIds = route.locations.filter((id) => visibleIds.has(id));
+    if (routeIds.length) {
+      focusOnLocations(routeIds, animated);
+      urlFramePending = false;
+      return;
+    }
+  }
+
+  if (selectedPlaceUrlActive && placeById(state.selectedId)) {
+    focusOnLocations([state.selectedId], animated);
+  } else if (getActiveFilterTokens().length && visiblePlacesCache.length) {
+    focusOnLocations(visiblePlacesCache.map((place) => place.id), animated);
+  } else {
+    fitDefaultView(animated);
+  }
+  urlFramePending = false;
+}
+
+function restoreUrlStateFromLocation({ frame = true } = {}) {
+  if (!allPlaces.length) return;
+  const params = new URL(window.location.href).searchParams;
+  const route = storyRoutes.find((item) => item.id === params.get("route")) || null;
+  const testament = ["OT", "NT"].includes(params.get("testament")) ? params.get("testament") : "all";
+  const confidence = confidenceOrder.includes(params.get("confidence")) ? params.get("confidence") : "all";
+  const requestedBook = params.get("book");
+  const requestedType = params.get("type");
+  const book = uniqueBooks().includes(requestedBook) ? requestedBook : "all";
+  const type = uniqueTypes().some((item) => item.type === requestedType) ? requestedType : "all";
+  const requestedPlace = params.get("place");
+  const explicitPlace = requestedPlace && placesById.has(requestedPlace) ? requestedPlace : null;
+  const requestedTab = params.get("tab");
+
+  restoringUrlState = true;
+  try {
+    state.testament = testament;
+    state.book = book;
+    state.confidence = confidence;
+    state.type = type;
+    state.route = route?.id || null;
+    state.search = (params.get("q") || "").trim().slice(0, 160);
+    selectedPlaceUrlActive = Boolean(explicitPlace);
+
+    if (explicitPlace) {
+      state.selectedId = explicitPlace;
+    } else if (route) {
+      state.selectedId = route.locations.find((id) => {
+        const place = placeById(id);
+        return place && matchesFilters(place);
+      }) || null;
+    } else {
+      state.selectedId = isMobileLayout() ? null : DEFAULT_SELECTED_PLACE_ID;
+    }
+
+    state.detailTab = explicitPlace && detailTabs.includes(requestedTab) ? requestedTab : "overview";
+    state.referenceBook = "all";
+    state.referenceSearch = "";
+    state.referenceLimit = REFERENCE_PAGE_SIZE;
+    state.placeListLimit = PLACE_LIST_PAGE_SIZE;
+    state.placeSheet = "peek";
+    detailPlaceId = state.selectedId;
+    renderAll({ urlMode: null });
+  } finally {
+    restoringUrlState = false;
+  }
+
+  requestUrlSync("replace");
+  urlFramePending = frame;
+  if (urlFramePending && mapLoaded) frameCurrentUrlState(true);
+}
+
+async function writeClipboardText(value) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Clipboard copy was unavailable");
+}
+
+function showShareFeedback(message, copied) {
+  window.clearTimeout(shareFeedbackTimer);
+  shareStatus.textContent = message;
+  shareButtonText.textContent = copied ? "Copied" : "Try again";
+  shareButton.classList.toggle("is-copied", copied);
+  shareFeedbackTimer = window.setTimeout(() => {
+    shareStatus.textContent = "";
+    shareButtonText.textContent = "Share";
+    shareButton.classList.remove("is-copied");
+  }, 2200);
+}
+
+async function copyCurrentViewLink() {
+  try {
+    await writeClipboardText(urlForCurrentState({ clean: true, includeImplicitPlace: true }).href);
+    showShareFeedback("Link copied to clipboard.", true);
+  } catch {
+    showShareFeedback("Could not copy the link. Copy it from the address bar instead.", false);
+  }
+}
+
 function currentHistoryState() {
   const historyState = window.history.state;
   return historyState && typeof historyState === "object" ? historyState : {};
@@ -864,6 +1057,7 @@ function releaseOverlayHistoryEntry() {
     suppressNextOverlayPop = false;
     overlayHistoryActive = false;
     overlayHistoryReleasePending = false;
+    flushPendingUrlSync();
   }
 }
 
@@ -1102,6 +1296,7 @@ function setDetailTab(
 
   if (changedTab) rememberDetailScroll(place.id, previousTab);
   state.detailTab = tab;
+  selectedPlaceUrlActive = true;
   if (tab === "references" && state.referenceLimit < REFERENCE_PAGE_SIZE) {
     state.referenceLimit = REFERENCE_PAGE_SIZE;
   }
@@ -1135,6 +1330,7 @@ function setDetailTab(
     requestAnimationFrame(syncDetailScrollState);
   }
 
+  requestUrlSync("replace");
   if (restoreFocus) focusRenderedDetailTab(tab, previousInspectorScrollTop);
   return changedTab;
 }
@@ -1249,7 +1445,8 @@ function selectPlace(id, { focusMap = false, revealSheet = false } = {}) {
   if (changedPlace) rememberDetailScroll();
   const targetSheet = revealSheet && isMobileLayout() ? "peek" : null;
   state.selectedId = id;
-  renderAll();
+  selectedPlaceUrlActive = true;
+  renderAll({ urlMode: changedPlace ? "push" : "replace" });
   if (changedPlace) resetDetailScroll();
   if (targetSheet) setPlaceSheetState(targetSheet, { updateMapPadding: !focusMap });
   if (focusMap) focusOnLocations([id], true);
@@ -1259,8 +1456,9 @@ function clearPlaceSelection() {
   if (!hasSelectedPlace()) return false;
   rememberDetailScroll();
   state.selectedId = null;
+  selectedPlaceUrlActive = false;
   state.placeSheet = "peek";
-  renderAll();
+  renderAll({ urlMode: "push" });
   if (mapLoaded && map) {
     map.easeTo({ padding: mapViewPadding(), duration: motionDuration(180) });
   }
@@ -1525,19 +1723,31 @@ function closeTopMobileOverlay({ fromHistory = false } = {}) {
   }
 }
 
-function handleOverlayPopState() {
+function handleHistoryPopState(event) {
   if (suppressNextOverlayPop) {
     suppressNextOverlayPop = false;
     overlayHistoryActive = false;
     overlayHistoryReleasePending = false;
-    syncOverlayHistory();
+    flushPendingUrlSync();
     return;
   }
 
-  if (!overlayHistoryActive) return;
-  overlayHistoryActive = false;
-  overlayHistoryReleasePending = false;
-  closeTopMobileOverlay({ fromHistory: true });
+  if (overlayHistoryActive) {
+    overlayHistoryActive = false;
+    overlayHistoryReleasePending = false;
+    closeTopMobileOverlay({ fromHistory: true });
+    flushPendingUrlSync();
+    return;
+  }
+
+  if (event.state?.bibleMapOverlay) {
+    try {
+      window.history.replaceState(durableHistoryState(), "", window.location.href);
+    } catch {
+      // A stale transient history marker can safely be ignored.
+    }
+  }
+  if (urlStateReady) restoreUrlStateFromLocation({ frame: true });
 }
 
 function handleViewportChange() {
@@ -1657,16 +1867,22 @@ function toggleRouteMenu() {
 }
 
 function handleRouteSelection(routeId) {
+  const previousRoute = state.route;
+  const previousSelectedId = state.selectedId;
   state.route = routeId || null;
   const route = getActiveRoute();
 
   if (route) {
+    selectedPlaceUrlActive = false;
     const visible = getVisiblePlaces();
     const firstVisibleRoutePlace = route.locations.find((id) => visible.some((place) => place.id === id));
     if (firstVisibleRoutePlace) state.selectedId = firstVisibleRoutePlace;
+  } else if (previousRoute && state.selectedId) {
+    selectedPlaceUrlActive = true;
   }
 
-  renderAll();
+  const changedView = previousRoute !== state.route || previousSelectedId !== state.selectedId;
+  renderAll({ urlMode: changedView ? "push" : "replace" });
 
   if (route) {
     const visibleIds = new Set(getVisiblePlaces().map((place) => place.id));
@@ -3489,6 +3705,7 @@ function initializeMap() {
     collapseCompactMapAttribution();
     syncCompass();
     renderAll();
+    if (urlFramePending) frameCurrentUrlState(false);
   });
 
   map.on("rotate", () => {
@@ -3503,7 +3720,7 @@ function initializeMap() {
 
 }
 
-function renderAll() {
+function renderAll({ urlMode = "replace" } = {}) {
   const visiblePlaces = getVisiblePlaces();
   normalizeSelection(visiblePlaces);
   const selectedPlace = placeById(state.selectedId);
@@ -3516,6 +3733,7 @@ function renderAll() {
   setPlaceSheetState(state.placeSheet, { updateMapPadding: false, animate: false });
   renderMap(visiblePlaces);
   requestAnimationFrame(() => bindScrollEdgeContainers(document, { revealActive: true }));
+  if (urlMode) requestUrlSync(urlMode);
 }
 
 function trapPlaceDetailFocus(event) {
@@ -3549,7 +3767,8 @@ function bindGlobalEvents() {
   syncViewportMetrics();
   syncMobileOverlayPlacement();
   window.addEventListener("resize", scheduleViewportChange);
-  window.addEventListener("popstate", handleOverlayPopState);
+  window.addEventListener("popstate", handleHistoryPopState);
+  shareButton.addEventListener("click", copyCurrentViewLink);
 
   miniCard.addEventListener("click", revealSelectedDetails);
   mobilePlaceSummary.addEventListener("click", () => {
@@ -3744,11 +3963,15 @@ async function boot() {
     return;
   }
 
-  if ((!state.selectedId && !isMobileLayout()) || (state.selectedId && !placesById.has(state.selectedId))) {
-    state.selectedId = allPlaces[0]?.id || null;
+  if (isOverlayHistoryState()) {
+    try {
+      window.history.replaceState(durableHistoryState(), "", window.location.href);
+    } catch {
+      // The transient overlay marker is harmless if history state is unavailable.
+    }
   }
-
-  renderAll();
+  urlStateReady = true;
+  restoreUrlStateFromLocation({ frame: true });
   initializeMap();
 }
 

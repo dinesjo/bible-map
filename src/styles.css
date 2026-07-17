@@ -3732,6 +3732,12 @@ a[target="_blank"]:not(.external-link)::after {
   }
 }
 
+.share-button.is-copied {
+  border-color: rgba(120, 178, 157, 0.5);
+  background: rgba(67, 126, 106, 0.18);
+  color: #d9eee4;
+}
+
 @media (min-width: 761px) and (max-width: 950px) and (max-height: 500px) {
   :root {
     --mobile-header-clearance: 66px;
@@ -6763,7 +6769,7 @@ body.places-open .map-legend {
 
 @media (max-width: 760px), (max-height: 500px) and (max-width: 950px) {
   .map-legend {
-    top: 10px;
+    top: calc(var(--mobile-header-clearance) + var(--safe-top) + 10px);
     left: 10px;
   }
 
