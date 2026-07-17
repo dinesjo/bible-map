@@ -178,6 +178,32 @@
             <strong id="visibleCount">0</strong>
           </button>
 
+          <fieldset class="overlay map-view-switcher" id="mapViewSwitcher" aria-describedby="mapViewStatus" disabled>
+            <legend class="sr-only">Map view</legend>
+            <label class="map-view-option">
+              <input type="radio" name="mapView" value="atlas" aria-label="Atlas, clear reference map" checked>
+              <span class="map-view-option-surface">
+                <i class="map-view-swatch is-atlas" aria-hidden="true"></i>
+                <span>Atlas</span>
+              </span>
+            </label>
+            <label class="map-view-option">
+              <input type="radio" name="mapView" value="relief" aria-label="Relief, terrain and landform">
+              <span class="map-view-option-surface">
+                <i class="map-view-swatch is-relief" aria-hidden="true"></i>
+                <span>Relief</span>
+              </span>
+            </label>
+            <label class="map-view-option">
+              <input type="radio" name="mapView" value="satellite" aria-label="Satellite, modern earth imagery">
+              <span class="map-view-option-surface">
+                <i class="map-view-swatch is-satellite" aria-hidden="true"></i>
+                <span>Satellite</span>
+              </span>
+            </label>
+          </fieldset>
+          <span class="sr-only" id="mapViewStatus" role="status" aria-live="polite"></span>
+
           <details class="overlay map-legend" aria-label="Map key">
             <summary>
               <span class="legend-summary-dots" aria-hidden="true">

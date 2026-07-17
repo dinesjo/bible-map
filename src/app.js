@@ -115,6 +115,9 @@ const placesToggle = document.getElementById("placesToggle");
 const placesPanel = document.getElementById("placesPanel");
 const placesClose = document.getElementById("placesClose");
 const placesBackdrop = document.getElementById("placesBackdrop");
+const mapViewSwitcher = document.getElementById("mapViewSwitcher");
+const mapViewInputs = [...mapViewSwitcher.querySelectorAll("input[name='mapView']")];
+const mapViewStatus = document.getElementById("mapViewStatus");
 const mapStage = document.querySelector(".map-stage");
 const placesMapPanel = document.querySelector(".map-panel");
 const aboutToggle = document.getElementById("aboutToggle");
@@ -196,6 +199,7 @@ let urlFramePending = false;
 let selectedPlaceUrlActive = false;
 let shareFeedbackTimer = 0;
 let mobileLayoutActive = isMobileLayout();
+let pendingMapViewSourceId = null;
 const dragExcludedSelector = [
   "a",
   "button",
@@ -3420,6 +3424,45 @@ function ensureMapViewLayers() {
   });
 }
 
+function activeMapViewOverlay() {
+  const activeLayerId = mapViewById(state.mapView).overlay?.layerId;
+  return mapViewOverlays.find(({ layer }) => layer.id === activeLayerId) || null;
+}
+
+function syncMapViewControl() {
+  mapViewSwitcher.disabled = !mapLoaded;
+  mapViewSwitcher.dataset.activeView = state.mapView;
+  mapViewInputs.forEach((input) => {
+    input.checked = input.value === state.mapView;
+  });
+}
+
+function announceMapView(message) {
+  mapViewStatus.textContent = "";
+  window.requestAnimationFrame(() => {
+    mapViewStatus.textContent = message;
+  });
+}
+
+function beginMapViewLoadAnnouncement() {
+  const view = mapViewById(state.mapView);
+  const overlay = activeMapViewOverlay();
+
+  if (!overlay) {
+    pendingMapViewSourceId = null;
+    announceMapView(`${view.label} view selected.`);
+    return;
+  }
+
+  pendingMapViewSourceId = overlay.sourceId;
+  if (map?.isSourceLoaded(overlay.sourceId)) {
+    pendingMapViewSourceId = null;
+    announceMapView(`${view.label} view ready.`);
+    return;
+  }
+  announceMapView(`Loading ${view.label.toLowerCase()} view.`);
+}
+
 function syncOpenBibleLabelPalette() {
   if (!mapLoaded || !map || !map.getLayer(LABEL_LAYER_ID)) return;
   const satellite = state.mapView === "satellite";
@@ -3435,6 +3478,7 @@ function syncOpenBibleLabelPalette() {
 function applyMapView() {
   state.mapView = normalizeMapViewId(state.mapView);
   document.body.dataset.mapView = state.mapView;
+  syncMapViewControl();
   if (!mapLoaded || !map) return;
 
   ensureMapViewLayers();
@@ -3445,6 +3489,19 @@ function applyMapView() {
     map.setLayoutProperty(overlay.layer.id, "visibility", visibility);
   });
   syncOpenBibleLabelPalette();
+}
+
+function selectMapView(value) {
+  const nextMapView = normalizeMapViewId(value);
+  if (nextMapView === state.mapView) {
+    syncMapViewControl();
+    return;
+  }
+
+  state.mapView = nextMapView;
+  applyMapView();
+  beginMapViewLoadAnnouncement();
+  requestUrlSync("replace");
 }
 
 function ensurePlaceLayers() {
@@ -3784,8 +3841,8 @@ function updateRouteData(visiblePlaces) {
 }
 
 function renderMap(visiblePlaces) {
-  if (!mapLoaded || !map) return;
   applyMapView();
+  if (!mapLoaded || !map) return;
   ensurePlaceLayers();
   updateRouteData(visiblePlaces);
 
@@ -3879,9 +3936,22 @@ function initializeMap() {
     if (mapLoaded) syncCompass();
   });
 
+  map.on("sourcedata", (event) => {
+    if (!pendingMapViewSourceId || event.sourceId !== pendingMapViewSourceId || !event.isSourceLoaded) return;
+    pendingMapViewSourceId = null;
+    announceMapView(`${mapViewById(state.mapView).label} view ready.`);
+  });
+
   map.on("error", (event) => {
     if (!mapLoaded && event && event.error) {
       setMapFallback("The MapLibre style or vector resources could not load.");
+      return;
+    }
+
+    const activeOverlay = activeMapViewOverlay();
+    if (mapLoaded && activeOverlay && event?.sourceId === activeOverlay.sourceId) {
+      pendingMapViewSourceId = null;
+      announceMapView(`${mapViewById(state.mapView).label} tiles are unavailable. The Atlas map remains underneath.`);
     }
   });
 
@@ -3971,6 +4041,11 @@ function bindGlobalEvents() {
   placesClose.addEventListener("click", closeDrawers);
   placesPanel.addEventListener("pointerdown", (event) => beginDismissDrag(event, "places"));
   placeList.addEventListener("scroll", handlePlaceListScroll, { passive: true });
+
+  mapViewSwitcher.addEventListener("change", (event) => {
+    if (!(event.target instanceof HTMLInputElement)) return;
+    selectMapView(event.target.value);
+  });
 
   aboutToggle.addEventListener("click", () => {
     setDrawer("about", openDrawer !== "about");
