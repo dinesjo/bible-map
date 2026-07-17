@@ -9,6 +9,13 @@ import {
   testamentMeta
 } from "./data/atlas-data.js";
 import { coordinateKey, coordinateStacks, groupPlacesByCoordinate } from "./data/coordinate-groups.js";
+import {
+  DEFAULT_MAP_VIEW_ID,
+  MAP_VIEW_QUERY_PARAM,
+  mapViewById,
+  normalizeMapViewId,
+  serializedMapViewId
+} from "./data/map-views.js";
 import { createPlaceSearchIndex, matchPlaceSearch, normalizeSearchText } from "./data/place-search.js";
 
 const MOBILE_MEDIA_QUERY = "(max-width: 760px), (max-height: 500px) and (max-width: 950px)";
@@ -20,6 +27,7 @@ const state = {
   type: "all",
   route: null,
   search: "",
+  mapView: DEFAULT_MAP_VIEW_ID,
   selectedId: window.matchMedia(MOBILE_MEDIA_QUERY).matches ? null : DEFAULT_SELECTED_PLACE_ID,
   detailTab: "overview",
   referenceBook: "all",
@@ -52,7 +60,7 @@ const DISMISS_DRAG_ACTIVATION = 8;
 const DISMISS_DRAG_DISTANCE = 92;
 const DISMISS_DRAG_VELOCITY = 0.62;
 const MOBILE_PLACE_DOCK_HEIGHT = 76;
-const URL_STATE_PARAMS = ["place", "route", "q", "testament", "book", "confidence", "type", "tab"];
+const URL_STATE_PARAMS = ["place", "route", "q", "testament", "book", "confidence", "type", "tab", MAP_VIEW_QUERY_PARAM];
 const scrollEdgeConfigs = [
   { selector: ".filter-stack", axis: "y" },
   { selector: ".book-row", axis: "y" },
@@ -826,6 +834,8 @@ function urlForCurrentState({ clean = false, includeImplicitPlace = false } = {}
   if (state.book !== "all") url.searchParams.set("book", state.book);
   if (state.confidence !== "all") url.searchParams.set("confidence", state.confidence);
   if (state.type !== "all") url.searchParams.set("type", state.type);
+  const serializedMapView = serializedMapViewId(state.mapView);
+  if (serializedMapView) url.searchParams.set(MAP_VIEW_QUERY_PARAM, serializedMapView);
   if (serializePlace && hasShareableDetailTab) {
     url.searchParams.set("tab", state.detailTab);
   }
@@ -912,6 +922,7 @@ function restoreUrlStateFromLocation({ frame = true } = {}) {
   const requestedPlace = params.get("place");
   const explicitPlace = requestedPlace && placesById.has(requestedPlace) ? requestedPlace : null;
   const requestedTab = params.get("tab");
+  const requestedMapView = normalizeMapViewId(params.get(MAP_VIEW_QUERY_PARAM));
 
   restoringUrlState = true;
   try {
@@ -921,6 +932,7 @@ function restoreUrlStateFromLocation({ frame = true } = {}) {
     state.type = type;
     state.route = route?.id || null;
     state.search = (params.get("q") || "").trim().slice(0, 160);
+    state.mapView = mapViewById(requestedMapView).id;
     selectedPlaceUrlActive = Boolean(explicitPlace);
 
     if (explicitPlace) {
