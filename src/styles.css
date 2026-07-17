@@ -4516,6 +4516,10 @@ a:focus-visible,
   border-radius: 2px;
 }
 
+.mini-card.is-empty {
+  border-top: 1px solid rgba(236, 224, 200, 0.2);
+}
+
 .mini-card:hover:not(:disabled) {
   transform: none;
   border-color: rgba(236, 224, 200, 0.38);
