@@ -12,6 +12,7 @@ import { coordinateKey, coordinateStacks, groupPlacesByCoordinate } from "./data
 import {
   DEFAULT_MAP_VIEW_ID,
   MAP_VIEW_QUERY_PARAM,
+  createMapViewOverlay,
   mapViewById,
   normalizeMapViewId,
   serializedMapViewId
@@ -61,6 +62,7 @@ const DISMISS_DRAG_DISTANCE = 92;
 const DISMISS_DRAG_VELOCITY = 0.62;
 const MOBILE_PLACE_DOCK_HEIGHT = 76;
 const URL_STATE_PARAMS = ["place", "route", "q", "testament", "book", "confidence", "type", "tab", MAP_VIEW_QUERY_PARAM];
+const mapViewOverlays = ["relief", "satellite"].map(createMapViewOverlay);
 const scrollEdgeConfigs = [
   { selector: ".filter-stack", axis: "y" },
   { selector: ".book-row", axis: "y" },
@@ -3397,6 +3399,54 @@ function localizeBaseMapToEnglish() {
   });
 }
 
+function firstBaseSymbolLayerId() {
+  if (!map) return undefined;
+  const style = map.getStyle();
+  if (!style || !Array.isArray(style.layers)) return undefined;
+  return style.layers.find((layer) => layer.type === "symbol" && !layer.id.startsWith("openbible-"))?.id;
+}
+
+function ensureMapViewLayers() {
+  if (!mapLoaded || !map) return;
+  const beforeLayerId = firstBaseSymbolLayerId();
+
+  mapViewOverlays.forEach((overlay) => {
+    if (!map.getSource(overlay.sourceId)) {
+      map.addSource(overlay.sourceId, overlay.source);
+    }
+    if (!map.getLayer(overlay.layer.id)) {
+      map.addLayer(overlay.layer, beforeLayerId);
+    }
+  });
+}
+
+function syncOpenBibleLabelPalette() {
+  if (!mapLoaded || !map || !map.getLayer(LABEL_LAYER_ID)) return;
+  const satellite = state.mapView === "satellite";
+  map.setPaintProperty(LABEL_LAYER_ID, "text-color", satellite ? "#fff1d6" : "#1f2a26");
+  map.setPaintProperty(
+    LABEL_LAYER_ID,
+    "text-halo-color",
+    satellite ? "rgba(8, 15, 13, 0.9)" : "rgba(255, 252, 246, 0.92)"
+  );
+  map.setPaintProperty(LABEL_LAYER_ID, "text-halo-width", satellite ? 2.1 : 1.6);
+}
+
+function applyMapView() {
+  state.mapView = normalizeMapViewId(state.mapView);
+  document.body.dataset.mapView = state.mapView;
+  if (!mapLoaded || !map) return;
+
+  ensureMapViewLayers();
+  const activeOverlayLayerId = mapViewById(state.mapView).overlay?.layerId;
+  mapViewOverlays.forEach((overlay) => {
+    if (!map.getLayer(overlay.layer.id)) return;
+    const visibility = overlay.layer.id === activeOverlayLayerId ? "visible" : "none";
+    map.setLayoutProperty(overlay.layer.id, "visibility", visibility);
+  });
+  syncOpenBibleLabelPalette();
+}
+
 function ensurePlaceLayers() {
   if (!mapLoaded || !map || map.getSource(SOURCE_ID)) return;
 
@@ -3735,6 +3785,7 @@ function updateRouteData(visiblePlaces) {
 
 function renderMap(visiblePlaces) {
   if (!mapLoaded || !map) return;
+  applyMapView();
   ensurePlaceLayers();
   updateRouteData(visiblePlaces);
 
@@ -3813,6 +3864,7 @@ function initializeMap() {
     mapLoaded = true;
     window.clearTimeout(fallbackTimer);
     clearMapFallback();
+    ensureMapViewLayers();
     ensurePlaceLayers();
     ensureRouteLayers();
     localizeBaseMapToEnglish();
