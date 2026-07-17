@@ -287,9 +287,20 @@ function createSearchText(place) {
     ].filter(Boolean).join(" ")).join(" "),
     place.bestIdentification?.name,
     place.bestIdentification?.description,
+    place.bestIdentification?.identification?.description,
+    place.bestIdentification?.resolution?.description,
     place.bestIdentification?.modern?.name,
-    place.bestIdentification?.modern?.precision,
-    place.alternatives.map((item) => `${item.name || ""} ${item.description || ""}`).join(" "),
+    place.bestIdentification?.modern?.precision?.description,
+    place.bestIdentification?.modern?.coordinateSource?.provider,
+    place.bestIdentification?.modern?.accuracyNotes?.join(" "),
+    place.bestIdentification?.modern?.precisionNotes?.join(" "),
+    place.alternatives.map((item) => [
+      item.name,
+      item.description,
+      item.identification?.description,
+      item.resolution?.description,
+      item.modern?.precision?.description
+    ].filter(Boolean).join(" ")).join(" "),
     Object.keys(place.translationNameCounts || {}).join(" ")
   ].join(" ").toLowerCase();
 }
@@ -1997,19 +2008,80 @@ function openBibleScoreLine(place) {
   return `${formatNumber(place.confidenceScore)} (${confidence} confidence)`;
 }
 
-function openBibleLocationRecordsLine(place) {
-  const count = Number.isFinite(place.sourceCount) ? place.sourceCount : 0;
-  return count
-    ? `${pluralize(count, "supporting location record")} for this identification`
-    : "no supporting location records for this identification";
+function openBibleSourceCatalogueLine(place) {
+  if (!Number.isInteger(place.identificationSourceCount)) return null;
+  return `OpenBible catalogues ${pluralize(place.identificationSourceCount, "source reference")} for this biblical place.`;
 }
 
 function openBibleScoringVotesLine(place) {
-  if (!Number.isFinite(place.voteCount)) return "no OpenBible geocoding votes";
-  const voteText = pluralize(place.voteCount, "OpenBible geocoding vote");
+  if (!Number.isFinite(place.voteCount)) return "The selected identification has no scored-vote count in this snapshot.";
+  const voteText = pluralize(place.voteCount, "scored source vote");
   return Number.isFinite(place.voteTotal)
-    ? `${voteText} with score total ${formatNumber(place.voteTotal)}`
-    : voteText;
+    ? `The selected identification has ${voteText}, with weighted total ${formatNumber(place.voteTotal)}.`
+    : `The selected identification has ${voteText}.`;
+}
+
+function coordinateText(place) {
+  const formatCoordinate = (value) => Number(value.toFixed(5)).toString();
+  return `${formatCoordinate(place.lat)}, ${formatCoordinate(place.lng)}`;
+}
+
+function distanceText(meters) {
+  if (!Number.isFinite(meters)) return null;
+  if (meters >= 1000) return `about ${Number((meters / 1000).toFixed(1))} km`;
+  return `about ${formatNumber(meters)} m`;
+}
+
+function pointRoleCopy(candidate) {
+  const role = candidate?.resolution?.lonlatType;
+  if (role === "representative point") {
+    return {
+      title: "Representative point",
+      detail: "A point inside a region or along a path, not the feature's full extent."
+    };
+  }
+  if (role === "center") {
+    const radius = distanceText(candidate?.resolution?.radiusMeters);
+    return {
+      title: "Approximate area center",
+      detail: radius ? `The possible area extends ${radius} from this center.` : "This is the center of an approximate possible area."
+    };
+  }
+  if (role === "settlement") {
+    return {
+      title: "Settlement-level location",
+      detail: "The exact position within this settlement is not known."
+    };
+  }
+  return {
+    title: "Mapped point",
+    detail: "OpenBible represents this candidate with a point coordinate."
+  };
+}
+
+function coordinateSourceMarkup(modern) {
+  const source = modern?.coordinateSource;
+  if (!source) return "No separate coordinate source is listed in the pinned record.";
+  const href = source.recordUrl || source.providerUrl;
+  const provider = source.provider || "Coordinate source";
+  const providerMarkup = href ? externalLinkMarkup(provider, href, "detail-link") : escapeHtml(provider);
+  const record = source.recordId ? ` (${escapeHtml(source.recordId)})` : "";
+  return `${providerMarkup}${record}`;
+}
+
+function evidenceNotesMarkup(modern) {
+  const groups = [
+    ["General-location notes", modern?.accuracyNotes || []],
+    ["Point-selection notes", modern?.precisionNotes || []]
+  ].filter(([, notes]) => notes.length);
+  if (!groups.length) return "";
+
+  return groups.map(([title, notes]) => `
+    <section class="detail-section evidence-notes">
+      <h3>${escapeHtml(title)}</h3>
+      <ul>${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>
+    </section>
+  `).join("");
 }
 
 function renderReferenceChip(reference) {
@@ -2349,16 +2421,20 @@ function renderDetails(place, visiblePlaces) {
   const displayName = displayPlaceName(place);
   const variantLabel = placeVariantLabel(place);
   const variantChip = variantLabel ? `<span class="place-variant detail-variant">${escapeHtml(variantLabel)}</span>` : "";
-  const modern = place.bestIdentification?.modern;
-  const modernName = modern?.name || place.bestIdentification?.name || "No named modern identification";
-  const candidateText = place.bestIdentification?.description || modernName;
+  const bestCandidate = place.bestIdentification;
+  const modern = bestCandidate?.modern;
+  const modernName = modern?.name || bestCandidate?.name || "No named modern identification";
+  const candidateText = bestCandidate?.description || modernName;
+  const pointRole = pointRoleCopy(bestCandidate);
+  const precision = modern?.precision;
+  const identificationScore = bestCandidate?.identification?.score;
   const testaments = place.testaments.map((testament) => testamentMeta[testament]?.label || testament).join(", ") || "No testament metadata";
   const referenceSummary = referenceSummaryForPlace(place);
   const alternatives = place.alternatives.length
     ? place.alternatives.map((alternative) => `
       <li>
         <strong>${escapeHtml(alternative.name || alternative.description || "Other possible location")}</strong>
-        <span>${escapeHtml(confidenceLabel(alternative.confidence))}${Number.isFinite(alternative.score) ? ` / score ${alternative.score}` : ""}</span>
+        <span>${escapeHtml(confidenceLabel(alternative.confidence))}${Number.isFinite(alternative.locationScore) ? ` / location score ${formatNumber(alternative.locationScore)}` : ""}</span>
       </li>
     `).join("")
     : `<li><strong>No other possible locations in the imported record.</strong><span>OpenBible records this as a single best candidate.</span></li>`;
@@ -2373,7 +2449,7 @@ function renderDetails(place, visiblePlaces) {
   const oldTestamentCount = referenceSummary.oldTestamentCount || 0;
   const newTestamentCount = referenceSummary.newTestamentCount || 0;
   const openBibleScore = openBibleScoreLine(place);
-  const openBibleLocationRecords = openBibleLocationRecordsLine(place);
+  const openBibleSourceCatalogue = openBibleSourceCatalogueLine(place);
   const openBibleScoringVotes = openBibleScoringVotesLine(place);
   const mobileLayout = isMobileLayout();
   const compactReferences = mobileLayout;
@@ -2532,35 +2608,64 @@ function renderDetails(place, visiblePlaces) {
           <strong>${escapeHtml(modernName)}</strong>
         </div>
         <div class="detail-stat">
-          <span>OpenBible confidence score</span>
+          <span>Mapped-location confidence</span>
           <strong>${escapeHtml(openBibleScore)}</strong>
         </div>
         <div class="detail-stat">
-          <span>Coordinates</span>
-          <strong>${escapeHtml(place.lng)}, ${escapeHtml(place.lat)}</strong>
+          <span>Latitude, longitude</span>
+          <strong>${escapeHtml(coordinateText(place))}</strong>
         </div>
         <div class="detail-stat">
-          <span>Type</span>
-          <strong>${escapeHtml(place.types.map(typeLabel).join(", ") || "Place")}</strong>
+          <span>Candidate locations</span>
+          <strong>${formatNumber(place.candidateCount)}</strong>
         </div>
       </div>
       <section class="detail-section">
         <h3>Mapped identification</h3>
         <p class="detail-note">${escapeHtml(candidateText)}</p>
-        <div class="detail-chip-row">
-          ${place.types.map((type) => `<span class="small-chip">${escapeHtml(typeLabel(type))}</span>`).join("")}
-          ${modern?.precision ? `<span class="small-chip">${escapeHtml(modern.precision)}</span>` : ""}
-        </div>
+        <dl class="evidence-list">
+          <div>
+            <dt>Identification chain</dt>
+            <dd>
+              ${escapeHtml(bestCandidate?.identification?.description || candidateText)}
+              ${Number.isFinite(identificationScore) ? `<small>Identification score ${formatNumber(identificationScore)}</small>` : ""}
+            </dd>
+          </div>
+          <div>
+            <dt>Map point role</dt>
+            <dd>${escapeHtml(pointRole.title)}<small>${escapeHtml(pointRole.detail)}</small></dd>
+          </div>
+          <div>
+            <dt>Coordinate precision</dt>
+            <dd>
+              ${escapeHtml(precision?.description || "No precision description is listed.")}
+              <small>
+                ${precision?.meters ? `OpenBible estimate: ${escapeHtml(distanceText(precision.meters))}. ` : ""}
+                This describes the modern reference coordinate, not certainty that the biblical place belongs here.
+              </small>
+            </dd>
+          </div>
+          <div>
+            <dt>Coordinate source</dt>
+            <dd>${coordinateSourceMarkup(modern)}</dd>
+          </div>
+        </dl>
       </section>
+      ${evidenceNotesMarkup(modern)}
       <section class="detail-section">
-        <h3>Alternative identifications</h3>
+        <h3>Other candidate locations</h3>
         <ul class="alternative-list">${alternatives}</ul>
+        ${place.candidateCount > place.alternatives.length + 1
+          ? `<p class="detail-note">Showing the three highest-scored alternatives out of ${formatNumber(place.candidateCount)} candidates in the pinned record.</p>`
+          : ""}
       </section>
       <section class="detail-section">
         <h3>How this identification was scored</h3>
         <p class="detail-note">
-          OpenBible lists ${escapeHtml(openBibleLocationRecords)}. It also lists ${escapeHtml(openBibleScoringVotes)}.
-          These imported numbers are OpenBible geocoding details, not Bible Map user votes or Bible verse counts.
+          The mapped-location score combines OpenBible's identification confidence with any resolution-path adjustment.
+          ${escapeHtml(openBibleScoringVotes)} Votes can support or oppose a location.
+          ${openBibleSourceCatalogue ? escapeHtml(openBibleSourceCatalogue) : ""}
+          These are OpenBible model details, not Bible Map user votes or Bible verse counts.
         </p>
       </section>
       ${relatedRoutes.length ? `
@@ -2880,6 +2985,9 @@ function renderAbout() {
   const generated = sourceMeta?.generatedAt
     ? new Date(sourceMeta.generatedAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
     : "unknown";
+  const snapshot = sourceMeta?.snapshotAt
+    ? new Date(sourceMeta.snapshotAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+    : "unknown";
   const counts = sourceMeta?.counts || { ancient: 0, resolved: 0, unresolved: 0 };
 
   aboutContent.innerHTML = `
@@ -2890,25 +2998,29 @@ function renderAbout() {
         It is not fetched live in the browser or in CI.
       </p>
       <div class="detail-meta-grid">
-        <div class="detail-stat"><span>Imported</span><strong>${escapeHtml(generated)}</strong></div>
+        <div class="detail-stat"><span>Upstream snapshot</span><strong>${escapeHtml(snapshot)}</strong></div>
+        <div class="detail-stat"><span>Browser data generated</span><strong>${escapeHtml(generated)}</strong></div>
         <div class="detail-stat"><span>OpenBible commit</span><strong>${escapeHtml(sourceMeta.commit.slice(0, 12))}</strong></div>
         <div class="detail-stat"><span>Resolved places</span><strong>${counts.resolved.toLocaleString("en-US")}</strong></div>
         <div class="detail-stat"><span>Unresolved records</span><strong>${counts.unresolved.toLocaleString("en-US")}</strong></div>
       </div>
+      <p>${counts.unresolved.toLocaleString("en-US")} records are not mapped because their leading OpenBible identification has no coordinate.</p>
     </section>
     <section class="about-section">
       <h3>License and attribution</h3>
       <p>
         Geodata is adapted from OpenBible.info Bible Geocoding Data under
         ${externalLinkMarkup(sourceMeta.license, sourceMeta.licenseUrl)}.
-        Imported records are reshaped for this application; embedded markup is stripped and images/OSM-derived geometry are not included in this version.
+        Imported records are reshaped for this application; embedded markup, images, and raw polygon/path geometry are excluded.
+        Some retained point coordinates derive from OpenStreetMap, with their per-place provenance shown in the Evidence tab.
       </p>
     </section>
     <section class="about-section">
       <h3>Uncertainty</h3>
       <p>
         Biblical geography often involves disputed identifications. Confidence bands expose OpenBible's scoring instead of hiding uncertainty.
-        A point should be read as the best imported candidate, not as a guaranteed exact location.
+        Each Evidence tab explains whether its marker is a mapped point, settlement-level location, approximate area center, or representative point for a larger feature.
+        No marker should be read as a guaranteed exact biblical location.
       </p>
     </section>
   `;

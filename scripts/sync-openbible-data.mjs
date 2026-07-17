@@ -14,6 +14,7 @@ const EXPECTED_COUNTS = {
   resolved: 1309,
   unresolved: 33
 };
+const OPENBIBLE_SOURCE_COMMIT_AT = "2021-11-01T00:57:10.000Z";
 
 const osisBookNames = new Map([
   ["Gen", "Gen"], ["Exod", "Exod"], ["Lev", "Lev"], ["Num", "Num"], ["Deut", "Deut"],
@@ -209,46 +210,161 @@ function wikidataLink(linkedData) {
   };
 }
 
-function firstResolutionWithCoordinates(identification) {
-  return identification?.resolutions?.find((resolution) => parseLonLat(resolution.lonlat)) || null;
+function firstPresent(...values) {
+  return values.find((value) => typeof value === "string" && value.trim()) || null;
 }
 
-function summarizeIdentification(identification, modernById) {
-  if (!identification) return null;
+function sourceTypeLabel(type) {
+  if (!type) return "Unknown source";
+  const labels = {
+    osm: "OpenStreetMap",
+    osm_group: "OpenStreetMap",
+    wikidata: "Wikidata",
+    representative_point_in_region: "OpenBible.info",
+    representative_point_along_path: "OpenBible.info"
+  };
+  return labels[type] || type.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
 
-  const resolution = firstResolutionWithCoordinates(identification);
-  const coordinates = parseLonLat(resolution?.lonlat);
-  const modernId = resolution?.modern_basis_id
-    || (identification.id_source === "modern" ? identification.id : null)
-    || (typeof identification.id === "string" && identification.id.startsWith("m") ? identification.id : null);
-  const modern = modernId ? modernById.get(modernId) : null;
-  const score = Number.isFinite(identification.score?.time_total) ? identification.score.time_total : null;
-  const description = stripMarkup(identification.description);
-  const name = modern?.friendly_id || description || null;
+function normalizedCoordinateSource(modern, sourceById) {
+  const raw = modern?.coordinates_source;
+  if (!raw || typeof raw !== "object") return null;
+  const provider = raw.source_id ? sourceById.get(raw.source_id) : null;
 
   return {
-    id: identification.id || null,
-    name,
-    description,
-    score,
-    confidence: confidenceBand(score),
-    voteCount: Number.isFinite(identification.score?.vote_count) ? identification.score.vote_count : null,
-    voteTotal: Number.isFinite(identification.score?.vote_total) ? identification.score.vote_total : null,
-    type: resolution?.type || modern?.type || null,
-    class: resolution?.class || modern?.class || null,
-    lng: coordinates ? roundCoordinate(coordinates.lng) : null,
-    lat: coordinates ? roundCoordinate(coordinates.lat) : null,
-    modern: modern ? {
+    type: raw.type || "unknown",
+    sourceId: raw.source_id || null,
+    provider: provider?.display_name || sourceTypeLabel(raw.type),
+    providerUrl: firstPresent(
+      provider?.url,
+      provider?.google_books_url,
+      provider?.worldcat_url,
+      provider?.logos_url,
+      provider?.web_archive_url
+    ),
+    recordId: raw.id || null,
+    recordUrl: firstPresent(raw.url, raw.data_url, raw.wiki_url, raw.georeference_url),
+    label: raw.label || null,
+    page: raw.page || null,
+    map: raw.map || null,
+    geometryCredit: raw.geometry_credit || null,
+    osmVersion: raw.osm_version || null
+  };
+}
+
+function normalizedPrecision(modern) {
+  const precision = modern?.precision;
+  if (!precision || typeof precision !== "object") return null;
+  return {
+    description: stripMarkup(precision.description),
+    type: precision.type || null,
+    meters: Number.isFinite(precision.meters) ? precision.meters : null,
+    radiusGeometryId: precision.radius_geometry_id || null
+  };
+}
+
+function strippedNotes(values) {
+  if (!Array.isArray(values)) return [];
+  return values.map(stripMarkup).filter(Boolean);
+}
+
+function candidatePairs(ancient, association) {
+  return (association?.identification_ids || [])
+    .map(([identificationIndex, resolutionIndex]) => {
+      const identification = ancient.identifications?.[identificationIndex];
+      const resolution = identification?.resolutions?.[resolutionIndex];
+      const coordinates = parseLonLat(resolution?.lonlat);
+      if (!identification || !resolution || !coordinates) return null;
+      const identificationScore = Number.isFinite(identification.score?.time_total)
+        ? identification.score.time_total
+        : null;
+      const resolutionWeight = Number.isFinite(resolution.best_time_score)
+        ? resolution.best_time_score
+        : 1000;
+      const adjustedScore = Number.isFinite(identificationScore)
+        ? identificationScore * (resolutionWeight / 1000)
+        : Number.NEGATIVE_INFINITY;
+      return { identificationIndex, resolutionIndex, identification, resolution, coordinates, adjustedScore };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (b.adjustedScore !== a.adjustedScore) return b.adjustedScore - a.adjustedScore;
+      if (a.identificationIndex !== b.identificationIndex) return a.identificationIndex - b.identificationIndex;
+      return a.resolutionIndex - b.resolutionIndex;
+    });
+}
+
+function earliestAssociationPair(association) {
+  return [...(association?.identification_ids || [])]
+    .filter((pair) => Array.isArray(pair) && Number.isInteger(pair[0]) && Number.isInteger(pair[1]))
+    .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))[0] || [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER];
+}
+
+function summarizeCandidate(ancient, modernId, association, modernById, sourceById) {
+  const selectedPair = candidatePairs(ancient, association)[0];
+  const modern = modernById.get(modernId);
+  const locationScore = Number.isFinite(association?.score) ? association.score : null;
+  if (!selectedPair || !modern || !Number.isFinite(locationScore)) return null;
+
+  const { identification, resolution, coordinates } = selectedPair;
+  const identificationDescription = stripMarkup(identification.description);
+  const resolutionDescription = stripMarkup(resolution.description);
+
+  return {
+    modernId,
+    name: modern.friendly_id || association.name || resolutionDescription || identificationDescription,
+    description: resolutionDescription || identificationDescription || modern.friendly_id,
+    lng: roundCoordinate(coordinates.lng),
+    lat: roundCoordinate(coordinates.lat),
+    locationScore,
+    confidence: confidenceBand(locationScore),
+    identification: {
+      id: identification.id || null,
+      idSource: identification.id_source || null,
+      description: identificationDescription,
+      score: Number.isFinite(identification.score?.time_total) ? identification.score.time_total : null,
+      voteCount: Number.isFinite(identification.score?.vote_count) ? identification.score.vote_count : null,
+      voteTotal: Number.isFinite(identification.score?.vote_total) ? identification.score.vote_total : null
+    },
+    resolution: {
+      description: resolutionDescription,
+      lonlatType: resolution.lonlat_type || null,
+      type: resolution.type || modern.type || null,
+      class: resolution.class || modern.class || null,
+      radiusMeters: Number.isFinite(resolution.geometry_radius_meters) ? resolution.geometry_radius_meters : null,
+      geometryId: resolution.geometry_id || null,
+      preciseGeometryId: resolution.precise_geometry_id || null,
+      localGeometryId: resolution.local_geometry_id || null,
+      geometryRoles: Object.keys(resolution.geojson_roles || {})
+    },
+    modern: {
       id: modern.id,
       name: modern.friendly_id,
       slug: modern.names?.[0]?.url_slug || null,
       type: modern.type || null,
       class: modern.class || null,
       geometry: modern.geometry || null,
-      precision: modern.precision?.description || null,
-      url: modernOpenBibleUrl(modern)
-    } : null
+      url: modernOpenBibleUrl(modern),
+      precision: normalizedPrecision(modern),
+      coordinateSource: normalizedCoordinateSource(modern, sourceById),
+      accuracyNotes: strippedNotes(modern.accuracy_claims),
+      precisionNotes: strippedNotes(modern.precision_claims)
+    },
+    sourceOrder: earliestAssociationPair(association)
   };
+}
+
+function candidatesForAncient(ancient, modernById, sourceById) {
+  return Object.entries(ancient.modern_associations || {})
+    .map(([modernId, association]) => summarizeCandidate(ancient, modernId, association, modernById, sourceById))
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (b.locationScore !== a.locationScore) return b.locationScore - a.locationScore;
+      if (a.sourceOrder[0] !== b.sourceOrder[0]) return a.sourceOrder[0] - b.sourceOrder[0];
+      if (a.sourceOrder[1] !== b.sourceOrder[1]) return a.sourceOrder[1] - b.sourceOrder[1];
+      return a.modernId.localeCompare(b.modernId, "en");
+    })
+    .map(({ sourceOrder, ...candidate }) => candidate);
 }
 
 async function fetchJsonl(file) {
@@ -266,10 +382,13 @@ async function fetchJsonl(file) {
   });
 }
 
-function buildPlace(ancient, modernById) {
-  const bestIdentification = ancient.identifications?.[0] || null;
-  const best = summarizeIdentification(bestIdentification, modernById);
-  if (!best || !Number.isFinite(best.lng) || !Number.isFinite(best.lat)) return null;
+function buildPlace(ancient, modernById, sourceById) {
+  const leadingHasCoordinates = ancient.identifications?.[0]?.resolutions
+    ?.some((resolution) => parseLonLat(resolution.lonlat));
+  if (!leadingHasCoordinates) return null;
+  const candidates = candidatesForAncient(ancient, modernById, sourceById);
+  const best = candidates[0];
+  if (!best) return null;
 
   const referenceDetails = (ancient.verses || [])
     .map(parseReference)
@@ -278,7 +397,9 @@ function buildPlace(ancient, modernById) {
   const references = referenceDetails.map((reference) => reference.readable);
   const books = sortBooks(new Set(referenceDetails.map((reference) => reference.bookId).filter(Boolean)));
   const referenceSummary = summarizeReferences(referenceDetails);
-  const sourceCount = Object.keys(ancient.identification_sources || {}).length;
+  const identificationSourceCount = ancient.identification_sources
+    ? Object.keys(ancient.identification_sources).length
+    : null;
 
   return {
     id: ancient.id,
@@ -295,16 +416,13 @@ function buildPlace(ancient, modernById) {
     referenceDetails,
     referenceSummary,
     bestIdentification: best,
-    alternatives: (ancient.identifications || [])
-      .slice(1)
-      .map((identification) => summarizeIdentification(identification, modernById))
-      .filter(Boolean)
-      .slice(0, 3),
+    alternatives: candidates.slice(1, 4),
+    candidateCount: candidates.length,
     confidence: best.confidence,
-    confidenceScore: best.score,
-    voteCount: best.voteCount,
-    voteTotal: best.voteTotal,
-    sourceCount,
+    confidenceScore: best.locationScore,
+    voteCount: best.identification.voteCount,
+    voteTotal: best.identification.voteTotal,
+    identificationSourceCount,
     translationNameCounts: ancient.translation_name_counts || {},
     links: {
       openBible: ancientOpenBibleUrl(ancient),
@@ -332,14 +450,16 @@ function calculateBounds(places) {
   ];
 }
 
-const [ancientRecords, modernRecords] = await Promise.all([
+const [ancientRecords, modernRecords, sourceRecords] = await Promise.all([
   fetchJsonl("ancient.jsonl"),
-  fetchJsonl("modern.jsonl")
+  fetchJsonl("modern.jsonl"),
+  fetchJsonl("source.jsonl")
 ]);
 
 const modernById = new Map(modernRecords.map((modern) => [modern.id, modern]));
+const sourceById = new Map(sourceRecords.map((source) => [source.id, source]));
 const places = ancientRecords
-  .map((ancient) => buildPlace(ancient, modernById))
+  .map((ancient) => buildPlace(ancient, modernById, sourceById))
   .filter(Boolean)
   .sort((a, b) => a.name.localeCompare(b.name, "en", { sensitivity: "base" }));
 
@@ -360,13 +480,14 @@ if (
 }
 
 const output = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   source: {
     name: OPENBIBLE_SOURCE_NAME,
     commit: OPENBIBLE_SOURCE_COMMIT,
     license: OPENBIBLE_LICENSE,
     licenseUrl: "https://creativecommons.org/licenses/by/4.0/",
     sourceUrl: "https://github.com/openbibleinfo/Bible-Geocoding-Data",
+    snapshotAt: OPENBIBLE_SOURCE_COMMIT_AT,
     generatedAt: new Date().toISOString(),
     counts,
     bounds: calculateBounds(places)

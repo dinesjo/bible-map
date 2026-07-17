@@ -36,7 +36,7 @@ test("matches the pinned OpenBible coordinate-stack baseline", async () => {
   const groupedRecordCount = stacks.reduce((total, stack) => total + stack.places.length, 0);
   const largestStack = Math.max(...stacks.map((stack) => stack.places.length));
 
-  assert.equal(stacks.length, 248);
-  assert.equal(groupedRecordCount, 776);
+  assert.equal(stacks.length, 242);
+  assert.equal(groupedRecordCount, 755);
   assert.equal(largestStack, 56);
 });

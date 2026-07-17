@@ -17,7 +17,18 @@ const EXPECTED_COUNTS = {
   unresolved: 33
 };
 const EXPECTED_BOUNDS = [[-6.944167, 11.595], [67.4308, 44.94278]];
+const EXPECTED_SNAPSHOT_AT = "2021-11-01T00:57:10.000Z";
+const EXPECTED_CANDIDATE_STATS = {
+  total: 4198,
+  multiple: 756,
+  moreThanFour: 295,
+  importedAlternatives: 1747
+};
+const EXPECTED_CONFIDENCE_COUNTS = { high: 750, medium: 433, low: 125, unknown: 1 };
+const EXPECTED_POINT_ROLE_COUNTS = { point: 861, "representative point": 294, center: 104, settlement: 50 };
+const EXPECTED_MISSING_COORDINATE_SOURCES = 12;
 const confidenceIds = new Set(Object.keys(confidenceMeta));
+const resolutionRoleIds = new Set(["point", "representative point", "center", "settlement"]);
 const testamentIds = new Set(Object.keys(testamentMeta));
 const bookIds = new Set(bookOrder);
 const errors = [];
@@ -37,6 +48,17 @@ function isNonEmptyString(value) {
 
 function isUrl(value, expectedPrefix = "https://") {
   return isNonEmptyString(value) && value.startsWith(expectedPrefix);
+}
+
+function isHttpUrl(value) {
+  return isNonEmptyString(value) && /^https?:\/\//.test(value);
+}
+
+function confidenceBand(score) {
+  if (!Number.isFinite(score) || score <= 0) return "unknown";
+  if (score >= 500) return "high";
+  if (score >= 200) return "medium";
+  return "low";
 }
 
 function sameNumber(a, b) {
@@ -213,6 +235,9 @@ function validateSource(source) {
   if (!isNonEmptyString(source.generatedAt) || Number.isNaN(Date.parse(source.generatedAt))) {
     addError("source.generatedAt must be an ISO date string");
   }
+  if (source.snapshotAt !== EXPECTED_SNAPSHOT_AT) {
+    addError(`source.snapshotAt expected ${EXPECTED_SNAPSHOT_AT}, received ${source.snapshotAt}`);
+  }
 
   Object.entries(EXPECTED_COUNTS).forEach(([key, expected]) => {
     if (source.counts?.[key] !== expected) {
@@ -221,6 +246,106 @@ function validateSource(source) {
   });
 
   validateBounds(source.bounds);
+}
+
+function validatePlainTextArray(owner, field, values) {
+  if (!Array.isArray(values)) {
+    addError(`${owner}: ${field} must be an array`);
+    return;
+  }
+  values.forEach((value, index) => {
+    if (!isNonEmptyString(value)) addError(`${owner}: ${field}[${index}] must be non-empty text`);
+    if (/[<>]/.test(value)) addError(`${owner}: ${field}[${index}] must not contain markup`);
+  });
+}
+
+function validateCandidate(owner, candidate) {
+  if (!candidate || typeof candidate !== "object") {
+    addError(`${owner} must be an object`);
+    return null;
+  }
+
+  if (!/^m[0-9a-f]{6}$/.test(candidate.modernId)) addError(`${owner}.modernId must be an OpenBible modern id`);
+  if (!isNonEmptyString(candidate.name)) addError(`${owner}.name is required`);
+  if (!isNonEmptyString(candidate.description)) addError(`${owner}.description is required`);
+  if (/[<>]/.test(candidate.description || "")) addError(`${owner}.description must be plain text`);
+  if (!Number.isFinite(candidate.lng) || !Number.isFinite(candidate.lat)) addError(`${owner}.lng/lat must be finite`);
+  if (!Number.isFinite(candidate.locationScore)) addError(`${owner}.locationScore must be finite`);
+  if (candidate.confidence !== confidenceBand(candidate.locationScore)) {
+    addError(`${owner}.confidence does not match locationScore`);
+  }
+
+  const identification = candidate.identification;
+  if (!identification || typeof identification !== "object") {
+    addError(`${owner}.identification is required`);
+  } else {
+    if (!isNonEmptyString(identification.description)) addError(`${owner}.identification.description is required`);
+    if (/[<>]/.test(identification.description || "")) addError(`${owner}.identification.description must be plain text`);
+    if (!isNonEmptyString(identification.idSource)) addError(`${owner}.identification.idSource is required`);
+    ["score", "voteCount", "voteTotal"].forEach((field) => {
+      if (!Number.isFinite(identification[field]) && identification[field] !== null) {
+        addError(`${owner}.identification.${field} must be finite or null`);
+      }
+    });
+  }
+
+  const resolution = candidate.resolution;
+  if (!resolution || typeof resolution !== "object") {
+    addError(`${owner}.resolution is required`);
+  } else {
+    if (!isNonEmptyString(resolution.description)) addError(`${owner}.resolution.description is required`);
+    if (/[<>]/.test(resolution.description || "")) addError(`${owner}.resolution.description must be plain text`);
+    if (!resolutionRoleIds.has(resolution.lonlatType)) addError(`${owner}.resolution.lonlatType is invalid`);
+    if (resolution.lonlatType === "center" && (!Number.isFinite(resolution.radiusMeters) || resolution.radiusMeters <= 0)) {
+      addError(`${owner}.resolution.radiusMeters is required for an area center`);
+    }
+    if (resolution.radiusMeters !== null && (!Number.isFinite(resolution.radiusMeters) || resolution.radiusMeters <= 0)) {
+      addError(`${owner}.resolution.radiusMeters must be positive or null`);
+    }
+    validateStringArray(`${owner}.resolution`, "geometryRoles", resolution.geometryRoles, { allowEmpty: true });
+  }
+
+  const modern = candidate.modern;
+  if (!modern || typeof modern !== "object") {
+    addError(`${owner}.modern is required`);
+    return candidate.modernId;
+  }
+  if (modern.id !== candidate.modernId) addError(`${owner}.modern.id must match modernId`);
+  if (!isNonEmptyString(modern.name)) addError(`${owner}.modern.name is required`);
+  if (!isUrl(modern.url, `https://www.openbible.info/geo/modern/${candidate.modernId}/`)) {
+    addError(`${owner}.modern.url is invalid`);
+  }
+
+  const precision = modern.precision;
+  if (!precision || typeof precision !== "object") {
+    addError(`${owner}.modern.precision is required`);
+  } else {
+    if (!isNonEmptyString(precision.description)) addError(`${owner}.modern.precision.description is required`);
+    if (/[<>]/.test(precision.description || "")) addError(`${owner}.modern.precision.description must be plain text`);
+    if (!isNonEmptyString(precision.type)) addError(`${owner}.modern.precision.type is required`);
+    if (precision.meters !== null && (!Number.isFinite(precision.meters) || precision.meters <= 0)) {
+      addError(`${owner}.modern.precision.meters must be positive or null`);
+    }
+  }
+
+  const coordinateSource = modern.coordinateSource;
+  if (coordinateSource !== null) {
+    if (!coordinateSource || typeof coordinateSource !== "object") {
+      addError(`${owner}.modern.coordinateSource must be an object or null`);
+    } else {
+      if (!isNonEmptyString(coordinateSource.type)) addError(`${owner}.modern.coordinateSource.type is required`);
+      if (!isNonEmptyString(coordinateSource.provider)) addError(`${owner}.modern.coordinateSource.provider is required`);
+      ["providerUrl", "recordUrl"].forEach((field) => {
+        if (coordinateSource[field] !== null && !isHttpUrl(coordinateSource[field])) {
+          addError(`${owner}.modern.coordinateSource.${field} must be an HTTP URL or null`);
+        }
+      });
+    }
+  }
+  validatePlainTextArray(`${owner}.modern`, "accuracyNotes", modern.accuracyNotes);
+  validatePlainTextArray(`${owner}.modern`, "precisionNotes", modern.precisionNotes);
+
+  return candidate.modernId;
 }
 
 function validatePlace(place, index, ids) {
@@ -249,7 +374,12 @@ function validatePlace(place, index, ids) {
     addError(`${owner}: confidenceScore must be finite or null`);
   }
   if (!Number.isInteger(place.verseCount) || place.verseCount < 0) addError(`${owner}: verseCount must be a non-negative integer`);
-  if (!Number.isInteger(place.sourceCount) || place.sourceCount < 0) addError(`${owner}: sourceCount must be a non-negative integer`);
+  if (
+    place.identificationSourceCount !== null
+    && (!Number.isInteger(place.identificationSourceCount) || place.identificationSourceCount < 0)
+  ) {
+    addError(`${owner}: identificationSourceCount must be a non-negative integer or null`);
+  }
 
   validateStringArray(owner, "types", place.types, { allowEmpty: true });
   validateStringArray(owner, "testaments", place.testaments, { allowEmpty: true }).forEach((testament) => {
@@ -268,27 +398,39 @@ function validatePlace(place, index, ids) {
   const referenceDetails = validateReferenceDetails(owner, place);
   validateReferenceSummary(owner, place.referenceSummary, summarizeReferences(referenceDetails));
 
-  if (!place.bestIdentification || typeof place.bestIdentification !== "object") {
-    addError(`${owner}: bestIdentification is required`);
-  } else {
-    const best = place.bestIdentification;
-    if (!confidenceIds.has(best.confidence)) addError(`${owner}: bestIdentification.confidence is invalid`);
-    if (!Number.isFinite(best.lng) || !Number.isFinite(best.lat)) addError(`${owner}: bestIdentification must include coordinates`);
-    if (!isNonEmptyString(best.description)) addError(`${owner}: bestIdentification.description is required`);
-    if (/[<>]/.test(best.description)) addError(`${owner}: bestIdentification.description must be plain text`);
+  const bestModernId = validateCandidate(`${owner}: bestIdentification`, place.bestIdentification);
+  const best = place.bestIdentification;
+  if (best && typeof best === "object") {
+    if (!sameNumber(place.lng, best.lng) || !sameNumber(place.lat, best.lat)) {
+      addError(`${owner}: top-level coordinates must match bestIdentification`);
+    }
+    if (place.confidence !== best.confidence) addError(`${owner}: confidence must match bestIdentification`);
+    if (place.confidenceScore !== best.locationScore) addError(`${owner}: confidenceScore must match bestIdentification.locationScore`);
+    if (place.voteCount !== best.identification?.voteCount) addError(`${owner}: voteCount must match best identification`);
+    if (place.voteTotal !== best.identification?.voteTotal) addError(`${owner}: voteTotal must match best identification`);
   }
 
   if (!Array.isArray(place.alternatives)) {
     addError(`${owner}: alternatives must be an array`);
   } else {
+    if (place.alternatives.length > 3) addError(`${owner}: alternatives must contain at most three candidates`);
+    const modernIds = new Set(bestModernId ? [bestModernId] : []);
+    let previousScore = best?.locationScore;
     place.alternatives.forEach((alternative, alternativeIndex) => {
-      if (!confidenceIds.has(alternative.confidence)) {
-        addError(`${owner}: alternatives[${alternativeIndex}].confidence is invalid`);
+      const alternativeOwner = `${owner}: alternatives[${alternativeIndex}]`;
+      const modernId = validateCandidate(alternativeOwner, alternative);
+      if (modernId && modernIds.has(modernId)) addError(`${alternativeOwner}.modernId must be unique`);
+      if (modernId) modernIds.add(modernId);
+      if (Number.isFinite(previousScore) && alternative.locationScore > previousScore) {
+        addError(`${alternativeOwner}.locationScore must not exceed the preceding candidate`);
       }
-      if (alternative.description && /[<>]/.test(alternative.description)) {
-        addError(`${owner}: alternatives[${alternativeIndex}].description must be plain text`);
-      }
+      previousScore = alternative.locationScore;
     });
+  }
+  if (!Number.isInteger(place.candidateCount) || place.candidateCount < 1) {
+    addError(`${owner}: candidateCount must be a positive integer`);
+  } else if (place.candidateCount < 1 + (place.alternatives?.length || 0)) {
+    addError(`${owner}: candidateCount cannot be smaller than the imported candidate list`);
   }
 
   if (!isUrl(place.links?.openBible, `https://www.openbible.info/geo/ancient/${place.id}/`)) {
@@ -312,7 +454,7 @@ function validateRoutes(placeIds) {
 
 const data = JSON.parse(await readFile(DATA_PATH, "utf8"));
 
-if (data.schemaVersion !== 1) addError("schemaVersion must be 1");
+if (data.schemaVersion !== 2) addError("schemaVersion must be 2");
 validateSource(data.source);
 
 if (!Array.isArray(data.places)) {
@@ -323,6 +465,41 @@ if (!Array.isArray(data.places)) {
 
 const placeIds = new Set();
 (data.places || []).forEach((place, index) => validatePlace(place, index, placeIds));
+
+const candidateStats = (data.places || []).reduce((stats, place) => ({
+  total: stats.total + (place.candidateCount || 0),
+  multiple: stats.multiple + (place.candidateCount > 1 ? 1 : 0),
+  moreThanFour: stats.moreThanFour + (place.candidateCount > 4 ? 1 : 0),
+  importedAlternatives: stats.importedAlternatives + (place.alternatives?.length || 0)
+}), { total: 0, multiple: 0, moreThanFour: 0, importedAlternatives: 0 });
+Object.entries(EXPECTED_CANDIDATE_STATS).forEach(([field, expected]) => {
+  if (candidateStats[field] !== expected) {
+    addError(`candidateStats.${field} expected ${expected}, received ${candidateStats[field]}`);
+  }
+});
+
+const primaryStats = (data.places || []).reduce((stats, place) => {
+  stats.confidence[place.confidence] = (stats.confidence[place.confidence] || 0) + 1;
+  const role = place.bestIdentification?.resolution?.lonlatType;
+  stats.pointRoles[role] = (stats.pointRoles[role] || 0) + 1;
+  if (!place.bestIdentification?.modern?.coordinateSource) stats.missingCoordinateSources += 1;
+  return stats;
+}, { confidence: {}, pointRoles: {}, missingCoordinateSources: 0 });
+Object.entries(EXPECTED_CONFIDENCE_COUNTS).forEach(([field, expected]) => {
+  if (primaryStats.confidence[field] !== expected) {
+    addError(`primaryStats.confidence.${field} expected ${expected}, received ${primaryStats.confidence[field]}`);
+  }
+});
+Object.entries(EXPECTED_POINT_ROLE_COUNTS).forEach(([field, expected]) => {
+  if (primaryStats.pointRoles[field] !== expected) {
+    addError(`primaryStats.pointRoles.${field} expected ${expected}, received ${primaryStats.pointRoles[field]}`);
+  }
+});
+if (primaryStats.missingCoordinateSources !== EXPECTED_MISSING_COORDINATE_SOURCES) {
+  addError(
+    `primaryStats.missingCoordinateSources expected ${EXPECTED_MISSING_COORDINATE_SOURCES}, received ${primaryStats.missingCoordinateSources}`
+  );
+}
 
 if (!placeIds.has(DEFAULT_SELECTED_PLACE_ID)) {
   addError(`DEFAULT_SELECTED_PLACE_ID "${DEFAULT_SELECTED_PLACE_ID}" is not present in generated data`);

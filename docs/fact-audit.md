@@ -5,10 +5,11 @@ This file tracks external checks that affect the app's biblical geography data.
 ## Current source baseline
 
 - `public/data/openbible-places.json` is generated from OpenBible.info Bible Geocoding Data commit `7eb18a5ee62f27b9b93bd6689ea272d76dd23b8f`.
-- The generated v1 snapshot includes all coordinate-backed ancient places: 1,309 resolved records from 1,342 ancient records, with 33 unresolved records counted in metadata.
-- The app uses OpenBible's modern identifications, verse lists, source/vote signals, linked data, and confidence scores as the canonical place-data baseline.
-- The generated app data excludes thumbnails, raw KML/GeoJSON geometry, OSM-derived polygons/paths, and images in this version.
-- Attribution and license: OpenBible.info Bible Geocoding Data, CC BY 4.0.
+- The generated v2 snapshot includes 1,309 mapped records from 1,342 ancient records. The 33 unmapped records are records whose leading OpenBible identification has no coordinate.
+- Candidate locations are deduplicated from OpenBible's `modern_associations`. The app uses the documented final association score, rather than the earlier identification-only score, for the selected point and confidence band. The pinned snapshot contains 4,198 unique modern candidates across the mapped records.
+- The app preserves each selected resolution's point role and radius, the modern location's precision description, coordinate-source provenance, and stripped general-location/point-selection notes. `identification_sources` is treated as a place-wide source catalogue, not evidence supporting only the selected candidate.
+- The generated app data excludes thumbnails, images, and raw KML/GeoJSON polygon/path geometry. Some retained point coordinates are OpenStreetMap-derived and preserve per-place provenance.
+- Attribution and license: OpenBible.info Bible Geocoding Data, CC BY 4.0; OpenStreetMap-derived data, ODbL 1.0.
 
 ## Historical prototype baseline
 
@@ -16,6 +17,13 @@ This file tracks external checks that affect the app's biblical geography data.
 - UNESCO World Heritage pages are used as independent checks for official heritage-site descriptions and geography, including Saint Catherine/Sinai, Ancient Jericho/Tell es-Sultan, Biblical Tels/Beer Sheba, Tyre, Damascus, Babylon, Susa, and Ephesus.
 - Public-domain KJV JSON from `thiagobodruk/bible` is used for bulk scripture reference existence checks.
 - Bible API's World English Bible output is used for targeted passage checks and fallback validation where the KJV JSON source has a verse-numbering gap.
+
+## 2026-07-17 generated-snapshot audit
+
+- Rebuilding candidates from OpenBible's documented final `modern_associations` scores changes the selected coordinate for 29 of 1,309 mapped records. Each move is to a strictly higher-scored final location; none of the ten editorial routes' stops moves.
+- Compared with the previous generated file, 298 mapped-location scores and 157 displayed confidence bands change. The resulting primary distribution is 750 high, 433 medium, 125 low, and 1 unknown.
+- The validator now locks the 4,198 unique-candidate total, selected point-role distribution, nullable coordinate-source coverage, top-level/candidate consistency, plain-text source notes, and exact pinned source metadata.
+- The Evidence tab separates final mapped-location confidence from the selected identification's earlier score and vote fields. It also explains representative points, approximate centers/radii, settlement-level locations, coordinate precision, and coordinate provenance without presenting a point as guaranteed exact geography.
 
 ## 2026-06-13 pass
 
