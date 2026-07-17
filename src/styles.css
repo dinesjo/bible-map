@@ -3879,7 +3879,7 @@ a[target="_blank"]:not(.external-link)::after {
   }
 
   body:not(.has-mobile-place) .mini-card.is-empty {
-    animation: none;
+    display: none;
   }
 }
 
@@ -3887,7 +3887,7 @@ a[target="_blank"]:not(.external-link)::after {
   to {
     opacity: 0;
     visibility: hidden;
-    transform: translate(-50%, -6px);
+    transform: translateY(-6px);
   }
 }
 
@@ -6768,8 +6768,28 @@ body.places-open .map-legend {
 }
 
 @media (max-width: 760px), (max-height: 500px) and (max-width: 950px) {
+  :root {
+    --mobile-map-overlay-top: calc(var(--mobile-header-clearance) + var(--safe-top) + 18px);
+  }
+
+  .map-fallback,
   .map-legend {
-    top: calc(var(--mobile-header-clearance) + var(--safe-top) + 10px);
+    top: var(--mobile-map-overlay-top);
+  }
+
+  body:not(.has-mobile-place) .mini-card.is-empty {
+    top: var(--mobile-map-overlay-top);
+    right: max(12px, calc(var(--safe-right) + 12px));
+    left: auto;
+    transform: none;
+  }
+
+  .map-stage:has(.map-legend[open]) .mini-card.is-empty {
+    opacity: 0;
+    visibility: hidden;
+  }
+
+  .map-legend {
     left: 10px;
   }
 
@@ -6778,7 +6798,50 @@ body.places-open .map-legend {
   }
 
   #maplibreMap .maplibregl-ctrl-scale {
-    margin-bottom: calc(var(--mobile-sheet-peek) + 17px);
+    margin-bottom: calc(var(--mobile-sheet-peek, var(--mobile-control-reserve, 0px)) + 17px);
     margin-left: 68px;
+  }
+}
+
+@media (max-width: 350px) {
+  .brand-block {
+    gap: 5px;
+  }
+
+  .brand-mark {
+    width: 28px;
+    height: 28px;
+  }
+
+  .brand-block .brand-name {
+    font-size: 1.15rem;
+  }
+
+  .atlas-actions {
+    gap: 4px;
+  }
+
+  #filterToggle {
+    min-width: 60px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .route-picker {
+    width: min(104px, 34vw);
+  }
+
+  body:not(.has-mobile-place) .mini-card.is-empty {
+    top: calc(var(--mobile-map-overlay-top) + 52px);
+  }
+}
+
+@media (min-width: 761px) and (max-width: 950px) and (max-height: 500px) {
+  .map-places-toggle {
+    top: var(--mobile-map-overlay-top);
+  }
+
+  .map-legend {
+    left: max(152px, calc(var(--safe-left) + 152px));
   }
 }
