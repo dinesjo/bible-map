@@ -170,7 +170,7 @@
           <aside class="overlay map-places-panel glass" id="placesPanel" role="dialog" aria-modal="false" aria-labelledby="placesTitle" aria-hidden="true">
             <div class="drawer-head">
               <div>
-                <p class="section-label">Current places</p>
+                <p class="section-label" id="placesKicker">Current places</p>
                 <h2 class="drawer-title" id="placesTitle">Place list</h2>
               </div>
               <div class="drawer-head-actions">
@@ -180,6 +180,7 @@
                 </button>
               </div>
             </div>
+            <p class="places-context-note" id="placesContextNote" hidden></p>
             <form class="search-shell places-search-shell" id="placesSearchForm" role="search">
               <svg class="ui-icon search-icon" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
               <label class="sr-only" for="placesSearchInput">Search the current place list</label>

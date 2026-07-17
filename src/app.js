@@ -8,6 +8,7 @@ import {
   storyRoutes,
   testamentMeta
 } from "./data/atlas-data.js";
+import { coordinateKey, coordinateStacks, groupPlacesByCoordinate } from "./data/coordinate-groups.js";
 
 const MOBILE_MEDIA_QUERY = "(max-width: 760px), (max-height: 500px) and (max-width: 950px)";
 const collator = new Intl.Collator("en", { sensitivity: "base" });
@@ -33,6 +34,11 @@ const ROUTE_MEMBER_LAYER_ID = "openbible-place-route-members";
 const CIRCLE_LAYER_ID = "openbible-place-circles";
 const HIT_LAYER_ID = "openbible-place-hit-targets";
 const LABEL_LAYER_ID = "openbible-place-labels";
+const COORDINATE_STACK_SOURCE_ID = "openbible-coordinate-stacks";
+const COORDINATE_STACK_HALO_LAYER_ID = "openbible-coordinate-stack-halos";
+const COORDINATE_STACK_CIRCLE_LAYER_ID = "openbible-coordinate-stack-circles";
+const COORDINATE_STACK_COUNT_LAYER_ID = "openbible-coordinate-stack-counts";
+const COORDINATE_STACK_HIT_LAYER_ID = "openbible-coordinate-stack-hit-targets";
 const ROUTE_LINE_SOURCE_ID = "story-route-line";
 const ROUTE_STOP_SOURCE_ID = "story-route-stops";
 const confidenceOrder = ["high", "medium", "low", "unknown"];
@@ -74,6 +80,9 @@ const searchClear = document.getElementById("searchClear");
 const placesSearchForm = document.getElementById("placesSearchForm");
 const placesSearchInput = document.getElementById("placesSearchInput");
 const placesSearchClear = document.getElementById("placesSearchClear");
+const placesKicker = document.getElementById("placesKicker");
+const placesTitle = document.getElementById("placesTitle");
+const placesContextNote = document.getElementById("placesContextNote");
 const summaryText = document.getElementById("summaryText");
 const visibleCount = document.getElementById("visibleCount");
 const activeFilterCount = document.getElementById("activeFilterCount");
@@ -155,6 +164,7 @@ let placeListObserver = null;
 let dismissDrag = null;
 let viewportUpdateFrame = 0;
 let scrollEdgeResizeObserver = null;
+let activeCoordinateStackKey = null;
 let overlayHistoryActive = false;
 let overlayHistoryReleasePending = false;
 let overlayHistorySyncPaused = false;
@@ -469,10 +479,11 @@ function handleSearchFocus() {
   });
 }
 
-function featureForPlace(place) {
+function featureForPlace(place, coordinateGroups = groupPlacesByCoordinate([place])) {
   const route = getActiveRoute();
   const inRoute = Boolean(route && route.locations.includes(place.id));
   const selected = place.id === state.selectedId;
+  const stackCount = coordinateGroups.get(coordinateKey(place))?.length || 1;
   const labelPriority = selected
     ? 2000
     : (inRoute ? 1200 : 0)
@@ -496,11 +507,36 @@ function featureForPlace(place) {
       inRoute,
       routeColor: route?.color || "#405f7a",
       muted: Boolean(route && !inRoute),
-      labelPriority
+      labelPriority,
+      stackCount
     },
     geometry: {
       type: "Point",
       coordinates: [place.lng, place.lat]
+    }
+  };
+}
+
+function featureForCoordinateStack(stack) {
+  const route = getActiveRoute();
+  const inRoute = Boolean(route && stack.places.some((place) => route.locations.includes(place.id)));
+  const selected = stack.places.some((place) => place.id === state.selectedId);
+  const representative = stack.places[0];
+
+  return {
+    type: "Feature",
+    id: stack.key,
+    properties: {
+      key: stack.key,
+      count: stack.places.length,
+      selected,
+      inRoute,
+      routeColor: route?.color || "#405f7a",
+      muted: Boolean(route && !inRoute)
+    },
+    geometry: {
+      type: "Point",
+      coordinates: [representative.lng, representative.lat]
     }
   };
 }
@@ -1319,6 +1355,9 @@ function setDrawer(name, open) {
     blurActiveMobileControlIn(dismissPanelForKind(previousDrawer));
   }
   openDrawer = open ? name : null;
+  if (previousDrawer === "places" && openDrawer !== "places") {
+    activeCoordinateStackKey = null;
+  }
 
   const filtersOpen = openDrawer === "filters";
   const placesOpen = openDrawer === "places";
@@ -1360,7 +1399,7 @@ function setDrawer(name, open) {
   if (aboutOpen) aboutClose.focus({ preventScroll: true });
   if (placesOpen) {
     requestAnimationFrame(() => {
-      renderPlaceList(visiblePlacesCache);
+      renderPlacesPanel(visiblePlacesCache);
       revealSelectedPlaceInList({ force: true });
     });
   }
@@ -2610,12 +2649,57 @@ function renderPlaceRow(place, index, className = "") {
   `;
 }
 
+function placesForActiveCoordinateStack(visiblePlaces = visiblePlacesCache) {
+  if (!activeCoordinateStackKey) return null;
+  return groupPlacesByCoordinate(visiblePlaces).get(activeCoordinateStackKey) || [];
+}
+
+function syncPlacesPanelContext(stackPlaces) {
+  const inStackMode = Array.isArray(stackPlaces);
+  placesKicker.textContent = inStackMode ? "Same map point" : "Current places";
+  placesTitle.textContent = inStackMode ? "Choose a place" : "Place list";
+  placesSearchForm.hidden = inStackMode;
+  placesContextNote.hidden = !inStackMode;
+
+  if (inStackMode) {
+    placesContextNote.textContent = `These ${formatNumber(stackPlaces.length)} visible places share this mapped coordinate.`;
+    placesPanel.setAttribute("aria-describedby", "placesContextNote");
+  } else {
+    placesContextNote.textContent = "";
+    placesPanel.removeAttribute("aria-describedby");
+  }
+}
+
+function renderPlacesPanel(visiblePlaces = visiblePlacesCache) {
+  const stackPlaces = placesForActiveCoordinateStack(visiblePlaces);
+  syncPlacesPanelContext(stackPlaces);
+  renderPlaceList(stackPlaces || visiblePlaces);
+}
+
+function openCoordinateStack(key) {
+  const stackPlaces = groupPlacesByCoordinate(visiblePlacesCache).get(key) || [];
+  if (stackPlaces.length < 2) {
+    if (stackPlaces.length === 1) selectPlace(stackPlaces[0].id, { revealSheet: true });
+    return;
+  }
+
+  activeCoordinateStackKey = key;
+  placeListRenderKey = "";
+  mapStage.focus({ preventScroll: true });
+  if (isMobileLayout()) setPlaceSheetState("peek", { animate: false });
+  setDrawer("places", true);
+  requestAnimationFrame(() => {
+    placeList.querySelector("[data-place]")?.focus({ preventScroll: true });
+  });
+}
+
 function extendPlaceList({ restoreFocusToLoadMore = false } = {}) {
-  const visiblePlaces = visiblePlacesCache.length ? visiblePlacesCache : getVisiblePlaces();
+  const allVisiblePlaces = visiblePlacesCache.length ? visiblePlacesCache : getVisiblePlaces();
+  const visiblePlaces = placesForActiveCoordinateStack(allVisiblePlaces) || allVisiblePlaces;
   if (state.placeListLimit >= visiblePlaces.length) return;
   const scrollTopBeforeLoad = placeList.scrollTop;
   state.placeListLimit = Math.min(visiblePlaces.length, state.placeListLimit + PLACE_LIST_PAGE_SIZE);
-  renderPlaceList(visiblePlaces);
+  renderPlacesPanel(allVisiblePlaces);
   placeList.scrollTop = scrollTopBeforeLoad;
   if (restoreFocusToLoadMore) {
     requestAnimationFrame(() => {
@@ -2877,12 +2961,16 @@ function ensurePlaceLayers() {
     type: "geojson",
     data: featureCollection()
   });
+  map.addSource(COORDINATE_STACK_SOURCE_ID, {
+    type: "geojson",
+    data: featureCollection()
+  });
 
   map.addLayer({
     id: SELECTED_LAYER_ID,
     type: "circle",
     source: SOURCE_ID,
-    filter: ["==", ["get", "selected"], true],
+    filter: ["all", ["==", ["get", "stackCount"], 1], ["==", ["get", "selected"], true]],
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 8, 6, 16, 10, 28],
       "circle-color": "#fff7e6",
@@ -2896,7 +2984,7 @@ function ensurePlaceLayers() {
     id: ROUTE_MEMBER_LAYER_ID,
     type: "circle",
     source: SOURCE_ID,
-    filter: ["all", ["==", ["get", "inRoute"], true], ["!=", ["get", "selected"], true]],
+    filter: ["all", ["==", ["get", "stackCount"], 1], ["==", ["get", "inRoute"], true], ["!=", ["get", "selected"], true]],
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 5.5, 6, 11, 10, 19],
       "circle-color": ["get", "routeColor"],
@@ -2911,6 +2999,7 @@ function ensurePlaceLayers() {
     id: CIRCLE_LAYER_ID,
     type: "circle",
     source: SOURCE_ID,
+    filter: ["==", ["get", "stackCount"], 1],
     paint: {
       "circle-radius": [
         "interpolate",
@@ -2947,6 +3036,7 @@ function ensurePlaceLayers() {
     id: HIT_LAYER_ID,
     type: "circle",
     source: SOURCE_ID,
+    filter: ["==", ["get", "stackCount"], 1],
     paint: {
       "circle-radius": hitRadiusExpression(),
       "circle-color": "#000000",
@@ -2960,7 +3050,11 @@ function ensurePlaceLayers() {
     type: "symbol",
     source: SOURCE_ID,
     minzoom: 3.2,
-    filter: [">=", ["get", "labelPriority"], 85],
+    filter: [
+      "all",
+      [">=", ["get", "labelPriority"], 85],
+      ["any", ["==", ["get", "stackCount"], 1], ["==", ["get", "selected"], true]]
+    ],
     layout: {
       "text-field": ["get", "name"],
       "text-size": ["interpolate", ["linear"], ["zoom"], 3, 10, 7, 12.5, 11, 15],
@@ -2986,7 +3080,82 @@ function ensurePlaceLayers() {
     }
   });
 
+  map.addLayer({
+    id: COORDINATE_STACK_HALO_LAYER_ID,
+    type: "circle",
+    source: COORDINATE_STACK_SOURCE_ID,
+    filter: ["==", ["get", "selected"], true],
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 13, 8, 19],
+      "circle-color": "#fff7e6",
+      "circle-opacity": 0.42,
+      "circle-stroke-color": "#23302c",
+      "circle-stroke-width": 1.2
+    }
+  });
+
+  map.addLayer({
+    id: COORDINATE_STACK_CIRCLE_LAYER_ID,
+    type: "circle",
+    source: COORDINATE_STACK_SOURCE_ID,
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 9.5, 8, 14],
+      "circle-color": "#25312d",
+      "circle-opacity": ["case", ["==", ["get", "muted"], true], 0.38, 0.94],
+      "circle-stroke-color": [
+        "case",
+        ["==", ["get", "inRoute"], true], ["get", "routeColor"],
+        "rgba(255,247,230,0.94)"
+      ],
+      "circle-stroke-width": ["case", ["==", ["get", "inRoute"], true], 2.4, 1.5]
+    }
+  });
+
+  map.addLayer({
+    id: COORDINATE_STACK_COUNT_LAYER_ID,
+    type: "symbol",
+    source: COORDINATE_STACK_SOURCE_ID,
+    layout: {
+      "text-field": ["to-string", ["get", "count"]],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 2, 9, 8, 11],
+      "text-font": ["Noto Sans Regular"],
+      "text-allow-overlap": true,
+      "text-ignore-placement": true
+    },
+    paint: {
+      "text-color": "#fff7e6",
+      "text-opacity": ["case", ["==", ["get", "muted"], true], 0.66, 1]
+    }
+  });
+
+  map.addLayer({
+    id: COORDINATE_STACK_HIT_LAYER_ID,
+    type: "circle",
+    source: COORDINATE_STACK_SOURCE_ID,
+    paint: {
+      "circle-radius": isMobileLayout()
+        ? ["interpolate", ["linear"], ["zoom"], 2, 20, 8, 27]
+        : ["interpolate", ["linear"], ["zoom"], 2, 15, 8, 21],
+      "circle-color": "#000000",
+      "circle-opacity": 0.001,
+      "circle-stroke-width": 0
+    }
+  });
+
+  map.on("click", COORDINATE_STACK_HIT_LAYER_ID, (event) => {
+    const nearest = (event.features || []).reduce((best, candidate) => {
+      const coordinates = candidate.geometry?.coordinates;
+      if (!Array.isArray(coordinates) || coordinates.length < 2) return best;
+      const projected = map.project(coordinates);
+      const distance = Math.hypot(projected.x - event.point.x, projected.y - event.point.y);
+      return !best || distance < best.distance ? { feature: candidate, distance } : best;
+    }, null);
+    const key = nearest?.feature?.properties?.key;
+    if (key) openCoordinateStack(key);
+  });
+
   map.on("click", HIT_LAYER_ID, (event) => {
+    if (map.queryRenderedFeatures(event.point, { layers: [COORDINATE_STACK_HIT_LAYER_ID] }).length) return;
     const nearest = (event.features || []).reduce((best, candidate) => {
       const coordinates = candidate.geometry?.coordinates;
       if (!Array.isArray(coordinates) || coordinates.length < 2) return best;
@@ -3008,12 +3177,12 @@ function ensurePlaceLayers() {
     const interactiveAtPoint = Number.isFinite(clientX) && Number.isFinite(clientY)
       && document.elementsFromPoint(clientX, clientY).some((element) => element.closest(interactiveSelector));
     if (interactiveTarget || interactiveAtPoint) return;
-    const hitFeatures = map.queryRenderedFeatures(event.point, { layers: [HIT_LAYER_ID] });
+    const hitFeatures = map.queryRenderedFeatures(event.point, { layers: [HIT_LAYER_ID, COORDINATE_STACK_HIT_LAYER_ID] });
     if (hitFeatures.length) return;
     clearPlaceSelection();
   });
 
-  [HIT_LAYER_ID].forEach((layerId) => {
+  [HIT_LAYER_ID, COORDINATE_STACK_HIT_LAYER_ID].forEach((layerId) => {
     map.on("mouseenter", layerId, () => {
       map.getCanvas().style.cursor = "pointer";
     });
@@ -3126,8 +3295,11 @@ function renderMap(visiblePlaces) {
   updateRouteData(visiblePlaces);
 
   const source = map.getSource(SOURCE_ID);
-  if (!source) return;
-  source.setData(featureCollection(visiblePlaces.map(featureForPlace)));
+  const stackSource = map.getSource(COORDINATE_STACK_SOURCE_ID);
+  if (!source || !stackSource) return;
+  const coordinateGroups = groupPlacesByCoordinate(visiblePlaces);
+  source.setData(featureCollection(visiblePlaces.map((place) => featureForPlace(place, coordinateGroups))));
+  stackSource.setData(featureCollection(coordinateStacks(visiblePlaces).map(featureForCoordinateStack)));
 }
 
 function setMapFallback(message = "MapLibre or the vector basemap could not load.") {
@@ -3225,7 +3397,7 @@ function renderAll() {
   renderActiveFilters(visiblePlaces);
   renderSummary(visiblePlaces);
   renderMiniCard(selectedPlace);
-  renderPlaceList(visiblePlaces);
+  renderPlacesPanel(visiblePlaces);
   renderDetails(selectedPlace, visiblePlaces);
   setPlaceSheetState(state.placeSheet, { updateMapPadding: false, animate: false });
   renderMap(visiblePlaces);
@@ -3283,6 +3455,7 @@ function bindGlobalEvents() {
   filterPanel.addEventListener("pointerdown", (event) => beginDismissDrag(event, "filters"));
 
   placesToggle.addEventListener("click", () => {
+    activeCoordinateStackKey = null;
     if (isMobileLayout()) setPlaceSheetState("peek", { animate: false });
     setDrawer("places", openDrawer !== "places");
   });
