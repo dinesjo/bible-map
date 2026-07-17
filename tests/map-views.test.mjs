@@ -58,6 +58,7 @@ test("uses the documented EOX and Mapterhorn source formats", () => {
   assert.equal(satellite.source.type, "raster");
   assert.equal(satellite.source.maxzoom, 14);
   assert.match(satellite.source.tiles[0], /s2cloudless-2025_3857/);
+  assert.match(satellite.source.attribution, /EOX IT Services GmbH/);
   assert.match(satellite.source.attribution, /Copernicus Sentinel data 2025/);
   assert.match(satellite.source.attribution, /CC BY-NC-SA 4\.0/);
 });

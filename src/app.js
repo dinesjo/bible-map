@@ -200,6 +200,7 @@ let selectedPlaceUrlActive = false;
 let shareFeedbackTimer = 0;
 let mobileLayoutActive = isMobileLayout();
 let pendingMapViewSourceId = null;
+const failedMapViewSourceIds = new Set();
 const dragExcludedSelector = [
   "a",
   "button",
@@ -964,6 +965,7 @@ function restoreUrlStateFromLocation({ frame = true } = {}) {
     restoringUrlState = false;
   }
 
+  if (mapLoaded) beginMapViewLoadAnnouncement();
   requestUrlSync("replace");
   urlFramePending = frame;
   if (urlFramePending && mapLoaded) frameCurrentUrlState(true);
@@ -3436,18 +3438,22 @@ function firstBaseSymbolLayerId() {
   return style.layers.find((layer) => layer.type === "symbol" && !layer.id.startsWith("openbible-"))?.id;
 }
 
-function ensureMapViewLayers() {
-  if (!mapLoaded || !map) return;
+function ensureMapViewLayer(overlay) {
+  if (!mapLoaded || !map || !overlay) return;
   const beforeLayerId = firstBaseSymbolLayerId();
 
-  mapViewOverlays.forEach((overlay) => {
-    if (!map.getSource(overlay.sourceId)) {
-      map.addSource(overlay.sourceId, overlay.source);
-    }
-    if (!map.getLayer(overlay.layer.id)) {
-      map.addLayer(overlay.layer, beforeLayerId);
-    }
-  });
+  if (failedMapViewSourceIds.has(overlay.sourceId)) {
+    if (map.getLayer(overlay.layer.id)) map.removeLayer(overlay.layer.id);
+    if (map.getSource(overlay.sourceId)) map.removeSource(overlay.sourceId);
+    failedMapViewSourceIds.delete(overlay.sourceId);
+  }
+
+  if (!map.getSource(overlay.sourceId)) {
+    map.addSource(overlay.sourceId, overlay.source);
+  }
+  if (!map.getLayer(overlay.layer.id)) {
+    map.addLayer(overlay.layer, beforeLayerId);
+  }
 }
 
 function activeMapViewOverlay() {
@@ -3463,7 +3469,10 @@ function syncMapViewControl() {
   });
 }
 
-function announceMapView(message) {
+function announceMapView(message, { visible = false } = {}) {
+  mapViewSwitcher.classList.toggle("has-source-error", visible);
+  mapViewStatus.classList.toggle("is-visible", visible);
+  mapViewStatus.classList.toggle("sr-only", !visible);
   mapViewStatus.textContent = "";
   window.requestAnimationFrame(() => {
     mapViewStatus.textContent = message;
@@ -3507,7 +3516,8 @@ function applyMapView() {
   syncMapViewControl();
   if (!mapLoaded || !map) return;
 
-  ensureMapViewLayers();
+  const activeOverlay = activeMapViewOverlay();
+  ensureMapViewLayer(activeOverlay);
   const activeOverlayLayerId = mapViewById(state.mapView).overlay?.layerId;
   mapViewOverlays.forEach((overlay) => {
     if (!map.getLayer(overlay.layer.id)) return;
@@ -3906,9 +3916,9 @@ function clearMapFallback() {
 }
 
 function collapseCompactMapAttribution() {
-  if (!window.matchMedia("(max-width: 900px)").matches || !map) return;
+  if (!map) return;
   const attribution = map.getContainer().querySelector(".maplibregl-ctrl-attrib");
-  if (!attribution) return;
+  if (!attribution?.classList.contains("maplibregl-compact")) return;
   attribution.removeAttribute("open");
   attribution.classList.remove("maplibregl-compact-show");
 }
@@ -3935,7 +3945,6 @@ function initializeMap() {
     pitchWithRotate: false,
     cooperativeGestures: true,
     attributionControl: {
-      compact: true,
       customAttribution: `${externalLinkMarkup("OpenBible.info Bible Geocoding Data", sourceMeta.sourceUrl, "map-attribution-link")} ${sourceMeta.license}`
     }
   });
@@ -3947,7 +3956,6 @@ function initializeMap() {
     mapLoaded = true;
     window.clearTimeout(fallbackTimer);
     clearMapFallback();
-    ensureMapViewLayers();
     ensurePlaceLayers();
     ensureRouteLayers();
     localizeBaseMapToEnglish();
@@ -3955,6 +3963,7 @@ function initializeMap() {
     collapseCompactMapAttribution();
     syncCompass();
     renderAll();
+    if (state.mapView !== DEFAULT_MAP_VIEW_ID) beginMapViewLoadAnnouncement();
     if (urlFramePending) frameCurrentUrlState(false);
   });
 
@@ -3964,6 +3973,7 @@ function initializeMap() {
 
   map.on("sourcedata", (event) => {
     if (!pendingMapViewSourceId || event.sourceId !== pendingMapViewSourceId || !event.isSourceLoaded) return;
+    failedMapViewSourceIds.delete(event.sourceId);
     pendingMapViewSourceId = null;
     announceMapView(`${mapViewById(state.mapView).label} view ready.`);
   });
@@ -3976,8 +3986,14 @@ function initializeMap() {
 
     const activeOverlay = activeMapViewOverlay();
     if (mapLoaded && activeOverlay && event?.sourceId === activeOverlay.sourceId) {
+      if (failedMapViewSourceIds.has(activeOverlay.sourceId)) return;
+      const failedView = mapViewById(state.mapView);
+      failedMapViewSourceIds.add(activeOverlay.sourceId);
       pendingMapViewSourceId = null;
-      announceMapView(`${mapViewById(state.mapView).label} tiles are unavailable. The Atlas map remains underneath.`);
+      state.mapView = DEFAULT_MAP_VIEW_ID;
+      applyMapView();
+      requestUrlSync("replace");
+      announceMapView(`${failedView.label} tiles are unavailable. Atlas has been restored; select ${failedView.label} to retry.`, { visible: true });
     }
   });
 
