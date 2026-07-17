@@ -168,6 +168,8 @@ let detailPlaceId = null;
 let detailScrollPositions = new Map();
 let placeListRenderKey = "";
 let placeListObserver = null;
+let summaryAnnouncementTimer = 0;
+const composingSearchInputs = new WeakSet();
 let dismissDrag = null;
 let viewportUpdateFrame = 0;
 let scrollEdgeResizeObserver = null;
@@ -409,6 +411,13 @@ function getActiveFilterTokens() {
   return tokens;
 }
 
+function hasActivePlaceFilters() {
+  return state.testament !== "all"
+    || state.book !== "all"
+    || state.confidence !== "all"
+    || state.type !== "all";
+}
+
 function syncSearchControls() {
   if (searchInput.value !== state.search) searchInput.value = state.search;
   if (placesSearchInput.value !== state.search) placesSearchInput.value = state.search;
@@ -437,6 +446,7 @@ function submitSearch(sourceInput = searchInput) {
   const query = activeSearchLabel();
   if (!query) state.search = "";
   renderAll();
+  updateSummaryAnnouncement(visiblePlacesCache, { immediate: true });
 
   if (!query) {
     sourceInput.blur();
@@ -2094,7 +2104,7 @@ function renderActiveFilters(visiblePlaces) {
     `<span class="filter-summary-label is-filtered">Filtered</span>`,
     ...visibleTokens.map((token) => `<span class="tag">${escapeHtml(token)}</span>`),
     remainder ? `<span class="tag">+${remainder}</span>` : "",
-    `<span class="status-pill">${visiblePlaces.length.toLocaleString("en-US")} places</span>`,
+    `<span class="status-pill">${pluralize(visiblePlaces.length, "place")}</span>`,
     `<button class="filter-reset-pill" type="button" data-clear-active-filters>Reset</button>`
   ].filter(Boolean).join(" ");
 }
@@ -2941,13 +2951,14 @@ function searchReasonsForPlace(place) {
     .filter((reason) => reason.kind !== "name");
 }
 
-function searchReasonMarkup(reason) {
+function searchReasonMarkup(reason, hiddenReasonCount = 0) {
   return `
     <span class="place-match-reason">
       <span class="place-match-kind">${escapeHtml(reason.label)}</span>
       <span aria-hidden="true"> · </span>
       <span class="place-match-value">${escapeHtml(reason.value)}</span>
       ${reason.detail ? `<span class="place-match-detail"> · ${escapeHtml(reason.detail)}</span>` : ""}
+      ${hiddenReasonCount ? `<span class="place-match-more" aria-hidden="true"> · +${hiddenReasonCount} more ${hiddenReasonCount === 1 ? "match" : "matches"}</span>` : ""}
     </span>
   `;
 }
@@ -2956,6 +2967,8 @@ function renderPlaceRow(place, index, className = "") {
   const variant = placeVariantLabel(place);
   const selected = state.selectedId === place.id;
   const searchReasons = searchReasonsForPlace(place);
+  const visibleSearchReasons = searchReasons.slice(0, 2);
+  const hiddenSearchReasonCount = searchReasons.length - visibleSearchReasons.length;
   const searchDescription = searchReasons
     .map((reason) => `${reason.label}: ${reason.value}${reason.detail ? `, ${reason.detail}` : ""}`)
     .join("; ");
@@ -2976,10 +2989,21 @@ function renderPlaceRow(place, index, className = "") {
         <small>${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")}</small>
         <strong>${escapeHtml(displayPlaceName(place))}</strong>
         ${variant ? `<span class="place-variant">${escapeHtml(variant)}</span>` : ""}
-        ${searchReasons.map(searchReasonMarkup).join("")}
+        ${visibleSearchReasons.map((reason, reasonIndex) => searchReasonMarkup(
+          reason,
+          reasonIndex === visibleSearchReasons.length - 1 ? hiddenSearchReasonCount : 0
+        )).join("")}
       </div>
       <span class="place-books">${escapeHtml(place.books.slice(0, 3).join(" / ") || pluralize(place.verseCount, "verse"))}</span>
     </button>
+  `;
+}
+
+function renderPlaceListItem(place, index, total, className = "") {
+  return `
+    <div class="place-list-item" role="listitem" aria-posinset="${index + 1}" aria-setsize="${total}">
+      ${renderPlaceRow(place, index, className)}
+    </div>
   `;
 }
 
@@ -3003,12 +3027,14 @@ function syncPlacesPanelContext(stackPlaces) {
     placesPanel.setAttribute("aria-describedby", "placesContextNote");
   } else if (inSearchMode) {
     const count = visiblePlacesCache.length;
-    const hasFilters = state.testament !== "all"
-      || state.book !== "all"
-      || state.confidence !== "all"
-      || state.type !== "all";
+    const hasFilters = hasActivePlaceFilters();
     placesContextNote.textContent = `${pluralize(count, "place")} ${count === 1 ? "matches" : "match"} “${query}”${hasFilters ? " with the current filters" : ""}.`;
-    placesPanel.setAttribute("aria-describedby", "placesContextNote");
+    placesContextNote.hidden = count === 0;
+    if (count) {
+      placesPanel.setAttribute("aria-describedby", "placesContextNote");
+    } else {
+      placesPanel.removeAttribute("aria-describedby");
+    }
   } else {
     placesContextNote.textContent = "";
     placesPanel.removeAttribute("aria-describedby");
@@ -3101,11 +3127,12 @@ function renderPlaceList(visiblePlaces) {
     state.placeListLimit = PLACE_LIST_PAGE_SIZE;
     listCounter.textContent = "0 places";
     const query = activeSearchLabel();
+    const filterSuggestion = hasActivePlaceFilters() ? " You can also reset the current filters." : "";
     placeList.innerHTML = query
       ? `
         <div class="empty-state place-list-empty">
           <strong>No matches for “${escapeHtml(query)}”</strong>
-          <span>Try a place name, modern location, Bible book or reference, place type, or journey.</span>
+          <span>Try a place name, modern location, Bible book or reference, place type, or journey.${filterSuggestion}</span>
         </div>
       `
       : `<div class="empty-state">No places match the current filters.</div>`;
@@ -3128,7 +3155,9 @@ function renderPlaceList(visiblePlaces) {
     ? `
       <div class="place-list-pinned">
         <p>Selected place</p>
-        ${renderPlaceRow(visiblePlaces[selectedIndex], selectedIndex, "is-pinned")}
+        <div role="list" aria-label="Selected place">
+          ${renderPlaceListItem(visiblePlaces[selectedIndex], selectedIndex, visiblePlaces.length, "is-pinned")}
+        </div>
       </div>
     `
     : "";
@@ -3142,11 +3171,16 @@ function renderPlaceList(visiblePlaces) {
         <strong>Show next ${formatNumber(Math.min(PLACE_LIST_PAGE_SIZE, hidden))}</strong>
       </button>
     `
-    : `<p class="place-list-end">Showing all ${formatNumber(visiblePlaces.length)} places.</p>`;
+    : `<p class="place-list-end">Showing all ${pluralize(visiblePlaces.length, "place")}.</p>`;
 
+  const listLabel = activeCoordinateStackKey
+    ? "Places at this map point"
+    : activeSearchLabel() ? "Search results" : "Current places";
   placeList.innerHTML = `
     ${selectedPin}
-    ${visibleSlice.map((place, index) => renderPlaceRow(place, index)).join("")}
+    <div class="place-list-results" role="list" aria-label="${listLabel}">
+      ${visibleSlice.map((place, index) => renderPlaceListItem(place, index, visiblePlaces.length)).join("")}
+    </div>
     ${loadMore}
   `;
 
@@ -3167,8 +3201,40 @@ function handlePlaceListScroll() {
   extendPlaceList();
 }
 
-function renderSummary(visiblePlaces) {
+function summaryAnnouncementFor(visiblePlaces) {
   const route = getActiveRoute();
+  const query = activeSearchLabel();
+  if (query) {
+    if (!visiblePlaces.length) {
+      const filterContext = hasActivePlaceFilters() ? " with the current filters" : "";
+      const filterSuggestion = hasActivePlaceFilters() ? " You can also reset the current filters." : "";
+      return `No places match “${query}”${filterContext}. Try another name, location, Bible reference, type, or journey.${filterSuggestion}`;
+    }
+    return `${pluralize(visiblePlaces.length, "place")} ${visiblePlaces.length === 1 ? "matches" : "match"} “${query}”. Open the place list to see why.`;
+  }
+
+  if (hasActivePlaceFilters()) {
+    return `${pluralize(visiblePlaces.length, "place")} ${visiblePlaces.length === 1 ? "matches" : "match"} the current filters.`;
+  }
+  return route ? route.description : "All mapped OpenBible places are visible.";
+}
+
+function updateSummaryAnnouncement(visiblePlaces, { immediate = false } = {}) {
+  const message = summaryAnnouncementFor(visiblePlaces);
+  window.clearTimeout(summaryAnnouncementTimer);
+
+  const announce = () => {
+    summaryText.textContent = message;
+  };
+
+  if (immediate) {
+    announce();
+  } else {
+    summaryAnnouncementTimer = window.setTimeout(announce, 300);
+  }
+}
+
+function renderSummary(visiblePlaces) {
   const query = activeSearchLabel();
   visibleCount.textContent = visiblePlaces.length.toLocaleString("en-US");
   placesToggle.setAttribute(
@@ -3177,11 +3243,7 @@ function renderSummary(visiblePlaces) {
   );
   listCounter.textContent = `${visiblePlaces.length.toLocaleString("en-US")} place${visiblePlaces.length === 1 ? "" : "s"}`;
 
-  if (query) {
-    summaryText.textContent = `${pluralize(visiblePlaces.length, "place")} ${visiblePlaces.length === 1 ? "matches" : "match"} “${query}”. Open the place list to see why.`;
-  } else {
-    summaryText.textContent = route ? route.description : "All mapped OpenBible places are visible.";
-  }
+  updateSummaryAnnouncement(visiblePlaces);
 }
 
 function renderMobilePlaceSummary(place) {
@@ -3804,6 +3866,15 @@ function trapPlaceDetailFocus(event) {
   return false;
 }
 
+function beginSearchComposition(event) {
+  composingSearchInputs.add(event.currentTarget);
+}
+
+function endSearchComposition(event) {
+  const input = event.currentTarget;
+  window.setTimeout(() => composingSearchInputs.delete(input), 0);
+}
+
 function bindGlobalEvents() {
   syncViewportMetrics();
   syncMobileOverlayPlacement();
@@ -3913,6 +3984,7 @@ function bindGlobalEvents() {
 
   searchForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (composingSearchInputs.has(searchInput)) return;
     submitSearch();
   });
 
@@ -3922,12 +3994,14 @@ function bindGlobalEvents() {
   });
 
   searchInput.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229 || composingSearchInputs.has(searchInput)) return;
     event.preventDefault();
     submitSearch();
   });
 
   searchInput.addEventListener("focus", handleSearchFocus);
+  searchInput.addEventListener("compositionstart", beginSearchComposition);
+  searchInput.addEventListener("compositionend", endSearchComposition);
 
   searchInput.addEventListener("search", () => {
     state.search = searchInput.value;
@@ -3942,6 +4016,7 @@ function bindGlobalEvents() {
 
   placesSearchForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (composingSearchInputs.has(placesSearchInput)) return;
     submitSearch(placesSearchInput);
   });
 
@@ -3951,7 +4026,7 @@ function bindGlobalEvents() {
   });
 
   placesSearchInput.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229 || composingSearchInputs.has(placesSearchInput)) return;
     event.preventDefault();
     submitSearch(placesSearchInput);
   });
@@ -3960,6 +4035,8 @@ function bindGlobalEvents() {
     state.search = placesSearchInput.value;
     renderAll();
   });
+  placesSearchInput.addEventListener("compositionstart", beginSearchComposition);
+  placesSearchInput.addEventListener("compositionend", endSearchComposition);
 }
 
 function renderLoading() {

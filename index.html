@@ -141,7 +141,7 @@
             <p class="section-label">Atlas view</p>
             <h2 id="mapTitle">Known biblical places</h2>
           </div>
-          <div class="active-row" id="activeFilters" aria-live="polite"></div>
+          <div class="active-row" id="activeFilters"></div>
         </div>
 
         <div class="map-stage" id="mapStage" tabindex="0" aria-label="Interactive map of biblical places">
@@ -218,7 +218,7 @@
                 </button>
               </div>
             </div>
-            <p class="places-context-note" id="placesContextNote" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+            <p class="places-context-note" id="placesContextNote" hidden></p>
             <form class="search-shell places-search-shell" id="placesSearchForm" role="search" aria-label="Search current results">
               <svg class="ui-icon search-icon" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
               <label class="sr-only" for="placesSearchInput">Search names, modern locations, aliases, Bible books and references, place types, or journeys</label>
@@ -338,7 +338,7 @@
       <button class="route-menu-scrim" id="routeMenuScrim" type="button" aria-label="Close route guide chooser" hidden></button>
     </section>
 
-    <p class="sr-only" id="summaryText">Choose a route guide to highlight a path on the map.</p>
+    <p class="sr-only" id="summaryText" role="status" aria-live="polite" aria-atomic="true">Choose a route guide to highlight a path on the map.</p>
   </main>
 
   <script type="module" src="/src/app.js"></script>
