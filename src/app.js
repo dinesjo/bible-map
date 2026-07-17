@@ -3344,6 +3344,32 @@ function renderAbout() {
       <p>${counts.unresolved.toLocaleString("en-US")} records are not mapped because their leading OpenBible identification has no coordinate.</p>
     </section>
     <section class="about-section">
+      <h3>Map layers</h3>
+      <p>
+        The biblical place data stays the same in every view. Atlas, Relief, and Satellite only change the cartographic surface beneath it.
+      </p>
+      <ul class="map-source-list">
+        <li>
+          <i class="map-view-swatch is-atlas" aria-hidden="true"></i>
+          <strong>Atlas</strong>
+          <p>${externalLinkMarkup("OpenFreeMap", "https://openfreemap.org/")} vector tiles and OpenStreetMap labels.</p>
+        </li>
+        <li>
+          <i class="map-view-swatch is-relief" aria-hidden="true"></i>
+          <strong>Relief</strong>
+          <p>${externalLinkMarkup("Mapterhorn", "https://mapterhorn.com/attribution/")} elevation shading. Global terrain is primarily based on Copernicus GLO-30.</p>
+        </li>
+        <li>
+          <i class="map-view-swatch is-satellite" aria-hidden="true"></i>
+          <strong>Satellite</strong>
+          <p>${externalLinkMarkup("EOxCloudless", "https://cloudless.eox.at/")} 2025 Sentinel-2 composite under ${externalLinkMarkup("CC BY-NC-SA 4.0", "https://creativecommons.org/licenses/by-nc-sa/4.0/")}.</p>
+        </li>
+      </ul>
+      <p>
+        Relief and Satellite are requested directly from their providers when selected. Satellite shows the modern landscape at roughly 10-metre source resolution; it is not a reconstruction of the biblical world.
+      </p>
+    </section>
+    <section class="about-section">
       <h3>License and attribution</h3>
       <p>
         Geodata is adapted from OpenBible.info Bible Geocoding Data under
