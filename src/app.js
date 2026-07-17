@@ -9,6 +9,7 @@ import {
   testamentMeta
 } from "./data/atlas-data.js";
 import { coordinateKey, coordinateStacks, groupPlacesByCoordinate } from "./data/coordinate-groups.js";
+import { createPlaceSearchIndex, matchPlaceSearch, normalizeSearchText } from "./data/place-search.js";
 
 const MOBILE_MEDIA_QUERY = "(max-width: 760px), (max-height: 500px) and (max-width: 950px)";
 const collator = new Intl.Collator("en", { sensitivity: "base" });
@@ -161,6 +162,8 @@ let sourceMeta = null;
 let allPlaces = [];
 let placesById = new Map();
 let visiblePlacesCache = [];
+let activeSearchQuery = null;
+let searchMatchesById = new Map();
 let detailPlaceId = null;
 let detailScrollPositions = new Map();
 let placeListRenderKey = "";
@@ -278,49 +281,17 @@ function confidenceLabel(confidence) {
   return `${meta.label} (${meta.range})`;
 }
 
-function createSearchText(place) {
-  return [
-    place.name,
-    displayPlaceName(place),
-    placeVariantLabel(place),
-    place.slug,
-    place.types.join(" "),
-    place.testaments.join(" "),
-    place.books.join(" "),
-    place.references.join(" "),
-    (place.referenceDetails || []).map((reference) => [
-      reference.readable,
-      reference.osis,
-      reference.bookId,
-      reference.bookLabel,
-      reference.testament
-    ].filter(Boolean).join(" ")).join(" "),
-    place.bestIdentification?.name,
-    place.bestIdentification?.description,
-    place.bestIdentification?.identification?.description,
-    place.bestIdentification?.resolution?.description,
-    place.bestIdentification?.modern?.name,
-    place.bestIdentification?.modern?.precision?.description,
-    place.bestIdentification?.modern?.coordinateSource?.provider,
-    place.bestIdentification?.modern?.accuracyNotes?.join(" "),
-    place.bestIdentification?.modern?.precisionNotes?.join(" "),
-    place.alternatives.map((item) => [
-      item.name,
-      item.description,
-      item.identification?.description,
-      item.resolution?.description,
-      item.modern?.precision?.description
-    ].filter(Boolean).join(" ")).join(" "),
-    Object.keys(place.translationNameCounts || {}).join(" ")
-  ].join(" ").toLowerCase();
-}
-
 function preparePlaces(places) {
   allPlaces = places.map((place) => ({
     ...place,
-    searchText: createSearchText(place)
+    searchIndex: createPlaceSearchIndex(place, {
+      displayName: displayPlaceName(place),
+      routes: storyRoutes
+    })
   }));
   placesById = new Map(allPlaces.map((place) => [place.id, place]));
+  activeSearchQuery = null;
+  searchMatchesById = new Map();
 }
 
 function uniqueBooks() {
@@ -340,45 +311,46 @@ function uniqueTypes() {
     .map(([type, count]) => ({ type, count }));
 }
 
+function ensureSearchMatches() {
+  const query = normalizeSearchText(state.search);
+  if (query === activeSearchQuery) return query;
+
+  activeSearchQuery = query;
+  searchMatchesById = new Map();
+  if (!query) return query;
+
+  allPlaces.forEach((place) => {
+    const match = matchPlaceSearch(place.searchIndex, query);
+    if (match) searchMatchesById.set(place.id, match);
+  });
+  return query;
+}
+
+function activeSearchLabel() {
+  const query = state.search.trim();
+  return normalizeSearchText(query) ? query : "";
+}
+
 function matchesFilters(place) {
-  const search = state.search.trim().toLowerCase();
+  const search = ensureSearchMatches();
   return (state.testament === "all" || place.testaments.includes(state.testament))
     && (state.book === "all" || place.books.includes(state.book))
     && (state.confidence === "all" || place.confidence === state.confidence)
     && (state.type === "all" || place.types.includes(state.type))
-    && (!search || place.searchText.includes(search));
-}
-
-function searchRelevance(place, query) {
-  if (!query) return 0;
-  const name = displayPlaceName(place).toLowerCase();
-  const sourceName = String(place.name || "").toLowerCase();
-  const modernName = String(
-    place.bestIdentification?.modern?.name || place.bestIdentification?.name || ""
-  ).toLowerCase();
-  const alternativeNames = [
-    ...place.alternatives.map((item) => item.name || ""),
-    ...Object.keys(place.translationNameCounts || {})
-  ].map((value) => String(value).toLowerCase());
-
-  if ([name, sourceName, modernName].includes(query)) return 0;
-  if (name.startsWith(query) || sourceName.startsWith(query)) return 1;
-  if (name.split(/\s+/).some((word) => word.startsWith(query))) return 2;
-  if (name.includes(query) || sourceName.includes(query)) return 3;
-  if (modernName.startsWith(query)) return 4;
-  if (modernName.includes(query)) return 5;
-  if (alternativeNames.some((value) => value === query || value.startsWith(query))) return 6;
-  if (alternativeNames.some((value) => value.includes(query))) return 7;
-  return 8;
+    && (!search || searchMatchesById.has(place.id));
 }
 
 function sortPlaces(list) {
   const route = getActiveRoute();
-  const search = state.search.trim().toLowerCase();
+  const search = ensureSearchMatches();
   return [...list].sort((a, b) => {
     if (search) {
-      const relevanceDelta = searchRelevance(a, search) - searchRelevance(b, search);
+      const aMatch = searchMatchesById.get(a.id);
+      const bMatch = searchMatchesById.get(b.id);
+      const relevanceDelta = aMatch.score - bMatch.score;
       if (relevanceDelta !== 0) return relevanceDelta;
+      const tieBreakerDelta = aMatch.tieBreaker - bMatch.tieBreaker;
+      if (tieBreakerDelta !== 0) return tieBreakerDelta;
     }
 
     if (route) {
@@ -399,6 +371,7 @@ function sortPlaces(list) {
 }
 
 function getVisiblePlaces() {
+  ensureSearchMatches();
   visiblePlacesCache = sortPlaces(allPlaces.filter(matchesFilters));
   return visiblePlacesCache;
 }
@@ -431,7 +404,8 @@ function getActiveFilterTokens() {
   if (state.book !== "all") tokens.push(state.book);
   if (state.confidence !== "all") tokens.push(`${confidenceMeta[state.confidence].label} confidence`);
   if (state.type !== "all") tokens.push(typeLabel(state.type));
-  if (state.search.trim()) tokens.push(`"${state.search.trim()}"`);
+  const query = activeSearchLabel();
+  if (query) tokens.push(`"${query}"`);
   return tokens;
 }
 
@@ -453,27 +427,30 @@ function resetSearchAndFilters({ fitMap = false, focusSearch = false } = {}) {
   if (focusSearch) searchInput.focus();
 }
 
-function revealMobileSearchResults() {
-  if (!isMobileLayout()) return;
-  setPlaceSheetState("peek", { animate: false });
+function revealSearchResults() {
+  if (isMobileLayout()) setPlaceSheetState("peek", { animate: false });
   setDrawer("places", true);
 }
 
 function submitSearch(sourceInput = searchInput) {
   state.search = sourceInput.value;
+  const query = activeSearchLabel();
+  if (!query) state.search = "";
   renderAll();
-  sourceInput.blur();
 
+  if (!query) {
+    sourceInput.blur();
+    return;
+  }
   const visiblePlaces = visiblePlacesCache;
-  const query = state.search.trim();
   if (!visiblePlaces.length) {
-    if (query) revealMobileSearchResults();
+    revealSearchResults();
     return;
   }
 
   if (visiblePlaces.length === 1) {
-    closeDrawers();
-    selectPlace(visiblePlaces[0].id, { focusMap: true, revealSheet: true });
+    selectPlace(visiblePlaces[0].id, { focusMap: true });
+    revealSearchResults();
     return;
   }
 
@@ -481,7 +458,7 @@ function submitSearch(sourceInput = searchInput) {
     focusOnLocations(visiblePlaces.map((place) => place.id), true);
   }
 
-  if (query) revealMobileSearchResults();
+  revealSearchResults();
 }
 
 function handleSearchFocus() {
@@ -833,7 +810,7 @@ function urlForCurrentState({ clean = false, includeImplicitPlace = false } = {}
   if (state.route && storyRoutes.some((route) => route.id === state.route)) {
     url.searchParams.set("route", state.route);
   }
-  const search = state.search.trim().slice(0, 160);
+  const search = activeSearchLabel().slice(0, 160);
   if (search) url.searchParams.set("q", search);
   if (state.testament !== "all") url.searchParams.set("testament", state.testament);
   if (state.book !== "all") url.searchParams.set("book", state.book);
@@ -2959,17 +2936,47 @@ function placeListKeyFor(visiblePlaces) {
   return visiblePlaces.map((place) => place.id).join("|");
 }
 
+function searchReasonsForPlace(place) {
+  return (searchMatchesById.get(place.id)?.reasons || [])
+    .filter((reason) => reason.kind !== "name");
+}
+
+function searchReasonMarkup(reason) {
+  return `
+    <span class="place-match-reason">
+      <span class="place-match-kind">${escapeHtml(reason.label)}</span>
+      <span aria-hidden="true"> · </span>
+      <span class="place-match-value">${escapeHtml(reason.value)}</span>
+      ${reason.detail ? `<span class="place-match-detail"> · ${escapeHtml(reason.detail)}</span>` : ""}
+    </span>
+  `;
+}
+
 function renderPlaceRow(place, index, className = "") {
   const variant = placeVariantLabel(place);
   const selected = state.selectedId === place.id;
-  const classes = ["place-row", selected ? "is-selected" : "", variant ? "has-variant" : "", className].filter(Boolean).join(" ");
+  const searchReasons = searchReasonsForPlace(place);
+  const searchDescription = searchReasons
+    .map((reason) => `${reason.label}: ${reason.value}${reason.detail ? `, ${reason.detail}` : ""}`)
+    .join("; ");
+  const accessibleLabel = searchDescription
+    ? `${accessiblePlaceName(place)}. Search match: ${searchDescription}.`
+    : accessiblePlaceName(place);
+  const classes = [
+    "place-row",
+    selected ? "is-selected" : "",
+    variant ? "has-variant" : "",
+    searchReasons.length ? "has-search-reason" : "",
+    className
+  ].filter(Boolean).join(" ");
   return `
-    <button class="${escapeHtml(classes)}" type="button" data-place="${escapeHtml(place.id)}" aria-current="${selected}" aria-label="${escapeHtml(accessiblePlaceName(place))}">
+    <button class="${escapeHtml(classes)}" type="button" data-place="${escapeHtml(place.id)}" aria-current="${selected}" aria-label="${escapeHtml(accessibleLabel)}">
       <span class="place-index">${String(index + 1).padStart(2, "0")}</span>
       <div class="place-row-copy">
         <small>${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")}</small>
         <strong>${escapeHtml(displayPlaceName(place))}</strong>
         ${variant ? `<span class="place-variant">${escapeHtml(variant)}</span>` : ""}
+        ${searchReasons.map(searchReasonMarkup).join("")}
       </div>
       <span class="place-books">${escapeHtml(place.books.slice(0, 3).join(" / ") || pluralize(place.verseCount, "verse"))}</span>
     </button>
@@ -2983,13 +2990,24 @@ function placesForActiveCoordinateStack(visiblePlaces = visiblePlacesCache) {
 
 function syncPlacesPanelContext(stackPlaces) {
   const inStackMode = Array.isArray(stackPlaces);
-  placesKicker.textContent = inStackMode ? "Same map point" : "Current places";
-  placesTitle.textContent = inStackMode ? "Choose a place" : "Place list";
+  const query = activeSearchLabel();
+  const inSearchMode = !inStackMode && Boolean(query);
+  placesPanel.classList.toggle("is-search-mode", inSearchMode);
+  placesKicker.textContent = inStackMode ? "Same map point" : inSearchMode ? "Search" : "Current places";
+  placesTitle.textContent = inStackMode ? "Choose a place" : inSearchMode ? "Search results" : "Place list";
   placesSearchForm.hidden = inStackMode;
-  placesContextNote.hidden = !inStackMode;
+  placesContextNote.hidden = !(inStackMode || inSearchMode);
 
   if (inStackMode) {
     placesContextNote.textContent = `These ${formatNumber(stackPlaces.length)} visible places share this mapped coordinate.`;
+    placesPanel.setAttribute("aria-describedby", "placesContextNote");
+  } else if (inSearchMode) {
+    const count = visiblePlacesCache.length;
+    const hasFilters = state.testament !== "all"
+      || state.book !== "all"
+      || state.confidence !== "all"
+      || state.type !== "all";
+    placesContextNote.textContent = `${pluralize(count, "place")} ${count === 1 ? "matches" : "match"} “${query}”${hasFilters ? " with the current filters" : ""}.`;
     placesPanel.setAttribute("aria-describedby", "placesContextNote");
   } else {
     placesContextNote.textContent = "";
@@ -3081,7 +3099,16 @@ function renderPlaceList(visiblePlaces) {
     observePlaceListMore(null);
     placeListRenderKey = "";
     state.placeListLimit = PLACE_LIST_PAGE_SIZE;
-    placeList.innerHTML = `<div class="empty-state">No places match the current search and filters.</div>`;
+    listCounter.textContent = "0 places";
+    const query = activeSearchLabel();
+    placeList.innerHTML = query
+      ? `
+        <div class="empty-state place-list-empty">
+          <strong>No matches for “${escapeHtml(query)}”</strong>
+          <span>Try a place name, modern location, Bible book or reference, place type, or journey.</span>
+        </div>
+      `
+      : `<div class="empty-state">No places match the current filters.</div>`;
     return;
   }
 
@@ -3142,11 +3169,19 @@ function handlePlaceListScroll() {
 
 function renderSummary(visiblePlaces) {
   const route = getActiveRoute();
+  const query = activeSearchLabel();
   visibleCount.textContent = visiblePlaces.length.toLocaleString("en-US");
-  placesToggle.setAttribute("aria-label", `Open current place list, ${visiblePlaces.length.toLocaleString("en-US")} places`);
+  placesToggle.setAttribute(
+    "aria-label",
+    `${query ? "Open search results" : "Open current place list"}, ${pluralize(visiblePlaces.length, "place")}`
+  );
   listCounter.textContent = `${visiblePlaces.length.toLocaleString("en-US")} place${visiblePlaces.length === 1 ? "" : "s"}`;
 
-  summaryText.textContent = route ? route.description : "All mapped OpenBible places are visible.";
+  if (query) {
+    summaryText.textContent = `${pluralize(visiblePlaces.length, "place")} ${visiblePlaces.length === 1 ? "matches" : "match"} “${query}”. Open the place list to see why.`;
+  } else {
+    summaryText.textContent = route ? route.description : "All mapped OpenBible places are visible.";
+  }
 }
 
 function renderMobilePlaceSummary(place) {
@@ -3886,6 +3921,12 @@ function bindGlobalEvents() {
     renderAll();
   });
 
+  searchInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    submitSearch();
+  });
+
   searchInput.addEventListener("focus", handleSearchFocus);
 
   searchInput.addEventListener("search", () => {
@@ -3907,6 +3948,12 @@ function bindGlobalEvents() {
   placesSearchInput.addEventListener("input", () => {
     state.search = placesSearchInput.value;
     renderAll();
+  });
+
+  placesSearchInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    submitSearch(placesSearchInput);
   });
 
   placesSearchInput.addEventListener("search", () => {

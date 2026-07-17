@@ -99,13 +99,13 @@
         <div class="route-menu" id="routeMenu" role="listbox" aria-label="Choose route guide" hidden></div>
       </div>
 
-      <form class="search-shell" id="searchForm" role="search">
+      <form class="search-shell" id="searchForm" role="search" aria-label="Atlas search">
         <svg class="ui-icon search-icon" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
-        <label class="sr-only" for="searchInput">Search places, books, references, or modern locations</label>
+        <label class="sr-only" for="searchInput">Search place names, modern locations, aliases, Bible books and references, place types, or journeys</label>
         <input
           id="searchInput"
           type="search"
-          placeholder="Search places"
+          placeholder="Search"
           enterkeyhint="search"
           maxlength="160"
           autocomplete="off"
@@ -218,14 +218,14 @@
                 </button>
               </div>
             </div>
-            <p class="places-context-note" id="placesContextNote" hidden></p>
-            <form class="search-shell places-search-shell" id="placesSearchForm" role="search">
+            <p class="places-context-note" id="placesContextNote" role="status" aria-live="polite" aria-atomic="true" hidden></p>
+            <form class="search-shell places-search-shell" id="placesSearchForm" role="search" aria-label="Search current results">
               <svg class="ui-icon search-icon" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
-              <label class="sr-only" for="placesSearchInput">Search the current place list</label>
+              <label class="sr-only" for="placesSearchInput">Search names, modern locations, aliases, Bible books and references, place types, or journeys</label>
               <input
                 id="placesSearchInput"
                 type="search"
-                placeholder="Search current places"
+                placeholder="Search"
                 enterkeyhint="search"
                 maxlength="160"
                 autocomplete="off"
