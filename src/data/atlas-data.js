@@ -53,7 +53,7 @@ export const storyRoutes = [
     title: "Abraham's migration",
     subtitle: "Ur, Haran, Shechem, Bethel, Hebron, Beersheba, Egypt",
     description: "Follows the ancestral route from Mesopotamia into Canaan and down toward Egypt.",
-    locations: ["a6cf75c", "a6d9af3", "adf74d4", "a64f355", "a85151a", "ad2f6c2", "af301ca"],
+    locations: ["a6cf75c", "a6d9af3", "adf74d4", "a64f355", "a85151a", "a075d61", "af301ca"],
     color: "#b07b3d"
   },
   {

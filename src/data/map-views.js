@@ -1,5 +1,6 @@
 export const DEFAULT_MAP_VIEW_ID = "atlas";
 export const MAP_VIEW_QUERY_PARAM = "basemap";
+export const ATLAS_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 
 const MAPTERHORN_ATTRIBUTION = [
   '<a href="https://mapterhorn.com/attribution/" target="_blank" rel="noreferrer">© Mapterhorn</a>'

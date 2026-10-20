@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { placeContext } from "../src/data/place-context.js";
 import {
   DEFAULT_SELECTED_PLACE_ID,
   OPENBIBLE_LICENSE,
@@ -506,6 +507,16 @@ if (!placeIds.has(DEFAULT_SELECTED_PLACE_ID)) {
 }
 
 validateRoutes(placeIds);
+
+Object.entries(placeContext).forEach(([placeId, context]) => {
+  const owner = `placeContext.${placeId}`;
+  const place = data.places.find((place) => place.id === placeId);
+  if (!place) addError(`${owner}: unknown ancient place id`);
+  if (!isNonEmptyString(context.summary)) addError(`${owner}: summary is required`);
+  validateStringArray(owner, "references", context.references).forEach((reference) => {
+    if (!place?.references.includes(reference)) addError(`${owner}: reference "${reference}" does not belong to this place`);
+  });
+});
 
 const unknownBooks = [...new Set((data.places || []).flatMap((place) => place.books || []))]
   .filter((book) => !bookIds.has(book));

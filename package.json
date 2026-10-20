@@ -9,13 +9,16 @@
     "validate:data": "node scripts/validate-atlas-data.mjs",
     "test": "node --test",
     "check": "npm run test && npm run validate:data && npm run build",
+    "check:server": "node scripts/check-static-server.mjs",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "preview:fixtures": "node scripts/serve-ui-fixtures.mjs"
   },
   "dependencies": {
-    "maplibre-gl": "^5.24.0"
+    "maplibre-gl": "^6.15.0"
   },
   "devDependencies": {
+    "axe-core": "^4.14.0",
     "vite": "^8.0.16"
   }
 }

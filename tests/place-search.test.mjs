@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { suggestPlaceNames } from "../src/data/search-suggestions.js";
 
 import { storyRoutes } from "../src/data/atlas-data.js";
 import {
@@ -20,6 +21,29 @@ const indexedPlaces = dataset.places.map((place) => ({
     routes: storyRoutes
   })
 }));
+
+const suggestionPlaces = indexedPlaces.map(({ place, entries }) => ({ ...place, searchIndex: entries }));
+
+test("suggests close place-name typos without duplicating ancient variants", () => {
+  assert.equal(suggestPlaceNames(suggestionPlaces, "Jeruslaem")[0], "Jerusalem");
+  assert.equal(suggestPlaceNames(suggestionPlaces, "Bethlehm")[0], "Bethlehem");
+  assert.equal(suggestPlaceNames(suggestionPlaces, "Capernuam")[0], "Capernaum");
+  const results = suggestPlaceNames(suggestionPlaces, "Jeruslaem");
+  assert.equal(new Set(results).size, results.length);
+  assert.ok(results.length <= 3);
+});
+
+test("keeps references, short queries, exact names, and unrelated text out of suggestions", () => {
+  for (const query of ["Acts 1", "John4:5", "Ur", "Bethel", "Jerusalem", "find a place called nowhere", "unfindablexyz"]) {
+    assert.deepEqual(suggestPlaceNames(suggestionPlaces, query), [], query);
+  }
+});
+
+test("only suggests names from the caller's filtered candidate set", () => {
+  const ephesusOnly = suggestionPlaces.filter(({ id }) => id === "a5feb15");
+  assert.deepEqual(suggestPlaceNames(ephesusOnly, "Jeruslaem"), []);
+  assert.deepEqual(suggestPlaceNames(ephesusOnly, "Ephesuz"), ["Ephesus"]);
+});
 
 function indexedPlace(id) {
   return indexedPlaces.find(({ place }) => place.id === id);

@@ -1,4 +1,3 @@
-import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   DEFAULT_SELECTED_PLACE_ID,
@@ -11,6 +10,7 @@ import {
 import { coordinateKey, coordinateStacks, groupPlacesByCoordinate } from "./data/coordinate-groups.js";
 import {
   DEFAULT_MAP_VIEW_ID,
+  ATLAS_STYLE_URL,
   MAP_VIEW_QUERY_PARAM,
   createMapViewOverlay,
   mapViewById,
@@ -18,8 +18,20 @@ import {
   serializedMapViewId
 } from "./data/map-views.js";
 import { createPlaceSearchIndex, matchPlaceSearch, normalizeSearchText } from "./data/place-search.js";
+import { referenceMatchesSearch } from "./data/reference-search.js";
+import { placeContext } from "./data/place-context.js";
+import { suggestPlaceNames } from "./data/search-suggestions.js";
+import { createJourneyMapData, placesInJourney, clusterJourneyStops } from "./data/journey-map.js";
+import { placeMatchesFilters, placeFilterFacets } from "./data/place-filters.js";
+import { normalizePlaceOrder, orderAtlasPlaces } from "./data/place-order.js";
+import { CAMERA_QUERY_PARAM, parseMapCamera, serializeMapCamera } from "./data/map-camera.js";
+import { applyAtlasLabelTheme, applyAtlasMapTheme, applyBiblicalLabelTheme } from "./ui/map-theme.js";
+import { ATLAS_SOURCE as SOURCE_ID, ATLAS_STACK_SOURCE as COORDINATE_STACK_SOURCE_ID, ATLAS_CLUSTER_MAX_ZOOM as CLUSTER_MAX_ZOOM, ATLAS_LAYERS, atlasSource, atlasLayers, atlasHitRadius, atlasClusterHitRadius, atlasStackHitRadius } from "./ui/atlas-layers.js";
+import { JOURNEY_LINE_SOURCE as ROUTE_LINE_SOURCE_ID, JOURNEY_STOP_SOURCE as ROUTE_STOP_SOURCE_ID, JOURNEY_STOP_HIT_LAYER as ROUTE_STOP_HIT_LAYER_ID, journeyLayers } from "./ui/journey-layers.js";
 
-const MOBILE_MEDIA_QUERY = "(max-width: 760px), (max-height: 500px) and (max-width: 950px)";
+let maplibregl;
+const COMPACT_LANDSCAPE_MEDIA_QUERY = "(min-width: 500px) and (max-height: 500px)";
+const MOBILE_MEDIA_QUERY = "(max-width: 760px), (max-height: 500px)";
 const collator = new Intl.Collator("en", { sensitivity: "base" });
 const state = {
   testament: "all",
@@ -35,22 +47,15 @@ const state = {
   referenceSearch: "",
   referenceLimit: 160,
   placeListLimit: 160,
-  placeSheet: "peek"
+  placeOrder: "auto",
+  placeSheet: "peek",
+  journeyGuideOpen: false
 };
 
-const SOURCE_ID = "openbible-places";
-const SELECTED_LAYER_ID = "openbible-place-selected";
-const ROUTE_MEMBER_LAYER_ID = "openbible-place-route-members";
-const CIRCLE_LAYER_ID = "openbible-place-circles";
-const HIT_LAYER_ID = "openbible-place-hit-targets";
-const LABEL_LAYER_ID = "openbible-place-labels";
-const COORDINATE_STACK_SOURCE_ID = "openbible-coordinate-stacks";
-const COORDINATE_STACK_HALO_LAYER_ID = "openbible-coordinate-stack-halos";
-const COORDINATE_STACK_CIRCLE_LAYER_ID = "openbible-coordinate-stack-circles";
-const COORDINATE_STACK_COUNT_LAYER_ID = "openbible-coordinate-stack-counts";
-const COORDINATE_STACK_HIT_LAYER_ID = "openbible-coordinate-stack-hit-targets";
-const ROUTE_LINE_SOURCE_ID = "story-route-line";
-const ROUTE_STOP_SOURCE_ID = "story-route-stops";
+const {
+  singleHit: HIT_LAYER_ID, label: LABEL_LAYER_ID,
+  clusterHit: CLUSTER_HIT_LAYER_ID, stackHit: COORDINATE_STACK_HIT_LAYER_ID
+} = ATLAS_LAYERS;
 const confidenceOrder = ["high", "medium", "low", "unknown"];
 const detailTabs = ["overview", "references", "evidence"];
 const REFERENCE_PAGE_SIZE = 160;
@@ -61,7 +66,7 @@ const DISMISS_DRAG_ACTIVATION = 8;
 const DISMISS_DRAG_DISTANCE = 92;
 const DISMISS_DRAG_VELOCITY = 0.62;
 const MOBILE_PLACE_DOCK_HEIGHT = 76;
-const URL_STATE_PARAMS = ["place", "route", "q", "testament", "book", "confidence", "type", "tab", MAP_VIEW_QUERY_PARAM];
+const URL_STATE_PARAMS = ["place", "route", "q", "testament", "book", "confidence", "type", "tab", MAP_VIEW_QUERY_PARAM, CAMERA_QUERY_PARAM];
 const mapViewOverlays = ["relief", "satellite"].map(createMapViewOverlay);
 const scrollEdgeConfigs = [
   { selector: ".filter-stack", axis: "y" },
@@ -69,9 +74,8 @@ const scrollEdgeConfigs = [
   { selector: ".character-grid", axis: "y" },
   { selector: ".about-content", axis: "y" },
   { selector: ".place-list", axis: "y" },
-  { selector: ".route-menu", axis: "y" },
+  { selector: ".route-menu-options", axis: "y" },
   { selector: ".reference-book-distribution .book-bars", axis: "y" },
-  { selector: ".reference-book-strip", axis: "x" },
   { selector: ".detail-tabs", axis: "x" }
 ];
 
@@ -100,7 +104,6 @@ const visibleCount = document.getElementById("visibleCount");
 const activeFilterCount = document.getElementById("activeFilterCount");
 const listCounter = document.getElementById("listCounter");
 const activeFilters = document.getElementById("activeFilters");
-const miniCard = document.getElementById("miniCard");
 const compassReset = document.getElementById("compassReset");
 const zoomIn = document.getElementById("zoomIn");
 const zoomOut = document.getElementById("zoomOut");
@@ -108,17 +111,30 @@ const zoomHome = document.getElementById("zoomHome");
 const clearFilters = document.getElementById("clearFilters");
 const filterDone = document.getElementById("filterDone");
 const mapFallback = document.getElementById("mapFallback");
+const mapLoadStatus = document.getElementById("mapLoadStatus");
 const filterToggle = document.getElementById("filterToggle");
 const filterPanel = document.getElementById("filterPanel");
 const filterClose = document.getElementById("filterClose");
 const placesToggle = document.getElementById("placesToggle");
 const placesPanel = document.getElementById("placesPanel");
 const placesClose = document.getElementById("placesClose");
+const placesListTools = document.getElementById("placesListTools");
+const placesContextRow = document.getElementById("placesContextRow");
+const placesClearFilters = document.getElementById("placesClearFilters");
+const placeOrderSelect = document.getElementById("placeOrderSelect");
 const placesBackdrop = document.getElementById("placesBackdrop");
 const mapViewSwitcher = document.getElementById("mapViewSwitcher");
 const mapViewInputs = [...mapViewSwitcher.querySelectorAll("input[name='mapView']")];
 const mapViewStatus = document.getElementById("mapViewStatus");
+const mapViewFullMessage = document.getElementById("mapViewFullMessage");
+const mapViewCompactMessage = document.getElementById("mapViewCompactMessage");
+const mapViewDismiss = document.getElementById("mapViewDismiss");
 const mapStage = document.querySelector(".map-stage");
+const leaveJourney = document.getElementById("leaveJourney");
+const mapLegendBody = document.getElementById("mapLegendBody");
+const mapLegend = mapLegendBody.closest("details");
+const atlasLegendMarkup = mapLegendBody.innerHTML;
+const mapKeyboardHint = mapLegendBody.querySelector(".map-keyboard-hint").outerHTML;
 const placesMapPanel = document.querySelector(".map-panel");
 const aboutToggle = document.getElementById("aboutToggle");
 const aboutPanel = document.getElementById("aboutPanel");
@@ -159,9 +175,7 @@ const placesModalSiblings = [
 ].filter(Boolean);
 const mapStageTabIndex = mapStage.getAttribute("tabindex");
 const routeModalSiblings = [
-  document.querySelector(".brand-block"),
-  searchForm,
-  document.querySelector(".atlas-actions"),
+  document.querySelector(".atlas-bar"),
   document.querySelector(".map-panel"),
   inspectorPanel
 ].filter(Boolean);
@@ -173,8 +187,16 @@ let openDrawer = null;
 let drawerReturnFocus = null;
 let sourceMeta = null;
 let allPlaces = [];
+let bookLabelsById = new Map();
 let placesById = new Map();
 let visiblePlacesCache = [];
+let mapDataRevision = 0;
+let mapFrameIntent = null;
+let journeyStopFeatures = [];
+let journeyMarkerZoom = null;
+let cameraUrlActive = false;
+let cameraState = null;
+let restoringHistoryView = false;
 let activeSearchQuery = null;
 let searchMatchesById = new Map();
 let detailPlaceId = null;
@@ -183,11 +205,14 @@ let placeListRenderKey = "";
 let placeListObserver = null;
 let summaryAnnouncementTimer = 0;
 const composingSearchInputs = new WeakSet();
+const configuredMapCanvases = new WeakSet();
 let dismissDrag = null;
 let viewportUpdateFrame = 0;
 let scrollEdgeResizeObserver = null;
+const scrollEdgeObservedElements = new Set();
 let activeCoordinateStackKey = null;
 let overlayHistoryActive = false;
+let overlayHistoryBaseId = null;
 let overlayHistoryReleasePending = false;
 let overlayHistorySyncPaused = false;
 let closingOverlayFromHistory = false;
@@ -268,7 +293,12 @@ function confidenceWeight(confidence) {
 }
 
 function typeLabel(type) {
-  return type ? type.replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Place";
+  const labels = { "district in settlement": "City district", special: "Other feature" };
+  return labels[type] || (type ? type.charAt(0).toUpperCase() + type.slice(1) : "Place");
+}
+
+function placeTypeLabel(place) {
+  return place.types.map(typeLabel).join(" / ") || "Place";
 }
 
 function placeNameParts(place) {
@@ -284,7 +314,9 @@ function displayPlaceName(place) {
 
 function placeVariantLabel(place) {
   const { variant } = placeNameParts(place);
-  return variant ? `OpenBible variant ${variant}` : "";
+  if (!variant) return "";
+  const first = place.referenceDetails?.[0];
+  return first ? `First reference: ${first.bookLabel || first.bookId} ${first.chapter}:${first.verse}` : "Related historical record";
 }
 
 function accessiblePlaceName(place) {
@@ -295,7 +327,7 @@ function accessiblePlaceName(place) {
 
 function confidenceLabel(confidence) {
   const meta = confidenceMeta[confidence] || confidenceMeta.unknown;
-  return `${meta.label} (${meta.range})`;
+  return meta.label;
 }
 
 function preparePlaces(places) {
@@ -307,6 +339,7 @@ function preparePlaces(places) {
     })
   }));
   placesById = new Map(allPlaces.map((place) => [place.id, place]));
+  bookLabelsById = new Map(allPlaces.flatMap((place) => (place.referenceDetails || []).map((reference) => [reference.bookId, reference.bookLabel])));
   activeSearchQuery = null;
   searchMatchesById = new Map();
 }
@@ -348,48 +381,22 @@ function activeSearchLabel() {
   return normalizeSearchText(query) ? query : "";
 }
 
-function matchesFilters(place) {
-  const search = ensureSearchMatches();
-  return (state.testament === "all" || place.testaments.includes(state.testament))
-    && (state.book === "all" || place.books.includes(state.book))
-    && (state.confidence === "all" || place.confidence === state.confidence)
-    && (state.type === "all" || place.types.includes(state.type))
-    && (!search || searchMatchesById.has(place.id));
+function matchesPlaceFilters(place) {
+  return placeMatchesFilters(place, state);
 }
 
-function sortPlaces(list) {
-  const route = getActiveRoute();
+function matchesFilters(place) {
   const search = ensureSearchMatches();
-  return [...list].sort((a, b) => {
-    if (search) {
-      const aMatch = searchMatchesById.get(a.id);
-      const bMatch = searchMatchesById.get(b.id);
-      const relevanceDelta = aMatch.score - bMatch.score;
-      if (relevanceDelta !== 0) return relevanceDelta;
-      const tieBreakerDelta = aMatch.tieBreaker - bMatch.tieBreaker;
-      if (tieBreakerDelta !== 0) return tieBreakerDelta;
-    }
-
-    if (route) {
-      const aIndex = route.locations.indexOf(a.id);
-      const bIndex = route.locations.indexOf(b.id);
-      if (aIndex !== -1 || bIndex !== -1) {
-        if (aIndex === -1) return 1;
-        if (bIndex === -1) return -1;
-        return aIndex - bIndex;
-      }
-    }
-
-    const confidenceDelta = confidenceOrder.indexOf(a.confidence) - confidenceOrder.indexOf(b.confidence);
-    if (confidenceDelta !== 0) return confidenceDelta;
-    if (b.verseCount !== a.verseCount) return b.verseCount - a.verseCount;
-    return collator.compare(a.name, b.name);
-  });
+  return matchesPlaceFilters(place) && (!search || searchMatchesById.has(place.id));
 }
 
 function getVisiblePlaces() {
-  ensureSearchMatches();
-  visiblePlacesCache = sortPlaces(allPlaces.filter(matchesFilters));
+  const search = ensureSearchMatches();
+  const route = getActiveRoute();
+  const filtered = placesInJourney(allPlaces.filter(matchesFilters), route);
+  visiblePlacesCache = route ? filtered : orderAtlasPlaces(filtered, {
+    order: state.placeOrder, searchMatches: search ? searchMatchesById : null, nameForPlace: displayPlaceName
+  });
   return visiblePlacesCache;
 }
 
@@ -415,14 +422,14 @@ function normalizeSelection(visiblePlaces) {
   state.selectedId = visiblePlaces[0]?.id || null;
 }
 
-function getActiveFilterTokens() {
+function getActiveFilterTokens({ includeSearch = true } = {}) {
   const tokens = [];
   if (state.testament !== "all") tokens.push(testamentMeta[state.testament].label);
-  if (state.book !== "all") tokens.push(state.book);
+  if (state.book !== "all") tokens.push(bookLabelsById.get(state.book) || state.book);
   if (state.confidence !== "all") tokens.push(`${confidenceMeta[state.confidence].label} confidence`);
   if (state.type !== "all") tokens.push(typeLabel(state.type));
   const query = activeSearchLabel();
-  if (query) tokens.push(`"${query}"`);
+  if (includeSearch && query) tokens.push(`"${query}"`);
   return tokens;
 }
 
@@ -438,25 +445,47 @@ function syncSearchControls() {
   if (placesSearchInput.value !== state.search) placesSearchInput.value = state.search;
   searchClear.hidden = !state.search.trim();
   placesSearchClear.hidden = !state.search.trim();
+  const placeholder = getActiveRoute() ? "Search this journey" : "Place or Bible reference";
+  searchInput.placeholder = window.matchMedia(COMPACT_LANDSCAPE_MEDIA_QUERY).matches ? "Search" : placeholder;
+  placesSearchInput.placeholder = placeholder;
+  document.querySelector('label[for="searchInput"]').textContent = getActiveRoute() ? "Search this journey" : "Search places or Bible references";
+  document.querySelector('label[for="placesSearchInput"]').textContent = getActiveRoute() ? "Search journey stops" : "Search current places";
 }
 
-function resetSearchAndFilters({ fitMap = false, focusSearch = false } = {}) {
+function resetPlaceFilters({ fitMap = false } = {}) {
   state.testament = "all";
   state.book = "all";
   state.confidence = "all";
   state.type = "all";
-  state.search = "";
   renderAll();
-  if (fitMap) fitDefaultView(true);
+  if (fitMap) fitCurrentPlaces(true);
+}
+
+function resetSearchAndFilters({ fitMap = false, focusSearch = false } = {}) {
+  activeCoordinateStackKey = null;
+  state.search = "";
+  resetPlaceFilters({ fitMap });
   if (focusSearch) searchInput.focus();
 }
 
+function resetCurrentContext() {
+  const route = getActiveRoute();
+  resetSearchAndFilters({ fitMap: !route });
+  if (route) handleRouteSelection(route.id);
+}
+
 function revealSearchResults() {
+  activeCoordinateStackKey = null;
   if (isMobileLayout()) setPlaceSheetState("peek", { animate: false });
   setDrawer("places", true);
+  requestAnimationFrame(() => {
+    if (openDrawer !== "places") return;
+    (selectedPlaceListRow() || placeList.querySelector("[data-place], [data-search-suggestion], #emptyListReset") || placesClose).focus({ preventScroll: true });
+  });
 }
 
 function submitSearch(sourceInput = searchInput) {
+  activeCoordinateStackKey = null;
   state.search = sourceInput.value;
   const query = activeSearchLabel();
   if (!query) state.search = "";
@@ -468,25 +497,29 @@ function submitSearch(sourceInput = searchInput) {
     return;
   }
   const visiblePlaces = visiblePlacesCache;
+  revealSearchResults();
   if (!visiblePlaces.length) {
-    revealSearchResults();
     return;
   }
 
   if (visiblePlaces.length === 1) {
     selectPlace(visiblePlaces[0].id, { focusMap: true });
-    revealSearchResults();
     return;
   }
 
   if (mapLoaded && map) {
     focusOnLocations(visiblePlaces.map((place) => place.id), true);
   }
+}
 
-  revealSearchResults();
+function updatePlaceSearch(value) {
+  activeCoordinateStackKey = null;
+  state.search = value;
+  renderAll({ summaryImmediate: false });
 }
 
 function handleSearchFocus() {
+  searchForm.classList.add("is-expanded");
   if (!isMobileLayout()) return;
 
   if (!routeMenu.hidden) closeRouteMenu(false);
@@ -496,21 +529,18 @@ function handleSearchFocus() {
   }
 
   requestAnimationFrame(() => {
-    if (document.activeElement !== searchInput) {
+    if (!openDrawer && routeMenu.hidden && document.activeElement !== searchInput) {
       searchInput.focus({ preventScroll: true });
     }
   });
 }
 
 function featureForPlace(place, coordinateGroups = groupPlacesByCoordinate([place])) {
-  const route = getActiveRoute();
-  const inRoute = Boolean(route && route.locations.includes(place.id));
   const selected = place.id === state.selectedId;
   const stackCount = coordinateGroups.get(coordinateKey(place))?.length || 1;
   const labelPriority = selected
     ? 2000
-    : (inRoute ? 1200 : 0)
-      + Math.min(place.verseCount, 180)
+    : Math.min(place.verseCount, 180)
       + confidenceWeight(place.confidence) * 40
       + (place.types.includes("settlement") ? 26 : 0);
 
@@ -519,6 +549,7 @@ function featureForPlace(place, coordinateGroups = groupPlacesByCoordinate([plac
     id: place.id,
     properties: {
       id: place.id,
+      key: coordinateKey(place),
       name: displayPlaceName(place),
       confidence: place.confidence,
       confidenceLabel: confidenceMeta[place.confidence]?.label || "Unknown",
@@ -527,9 +558,6 @@ function featureForPlace(place, coordinateGroups = groupPlacesByCoordinate([plac
       books: place.books.slice(0, 3).join(" / "),
       verseCount: place.verseCount,
       selected,
-      inRoute,
-      routeColor: route?.color || "#405f7a",
-      muted: Boolean(route && !inRoute),
       labelPriority,
       stackCount
     },
@@ -541,9 +569,8 @@ function featureForPlace(place, coordinateGroups = groupPlacesByCoordinate([plac
 }
 
 function featureForCoordinateStack(stack) {
-  const route = getActiveRoute();
-  const inRoute = Boolean(route && stack.places.some((place) => route.locations.includes(place.id)));
-  const selected = stack.places.some((place) => place.id === state.selectedId);
+  const selectedPlace = stack.places.find((place) => place.id === state.selectedId);
+  const selected = Boolean(selectedPlace);
   const representative = stack.places[0];
 
   return {
@@ -552,10 +579,8 @@ function featureForCoordinateStack(stack) {
     properties: {
       key: stack.key,
       count: stack.places.length,
-      selected,
-      inRoute,
-      routeColor: route?.color || "#405f7a",
-      muted: Boolean(route && !inRoute)
+      selectedName: selectedPlace ? displayPlaceName(selectedPlace) : "",
+      selected
     },
     geometry: {
       type: "Point",
@@ -566,24 +591,6 @@ function featureForCoordinateStack(stack) {
 
 function featureCollection(features = []) {
   return { type: "FeatureCollection", features };
-}
-
-function confidenceColorExpression() {
-  return [
-    "match",
-    ["get", "confidence"],
-    "high", confidenceMeta.high.color,
-    "medium", confidenceMeta.medium.color,
-    "low", confidenceMeta.low.color,
-    "unknown", confidenceMeta.unknown.color,
-    confidenceMeta.unknown.color
-  ];
-}
-
-function hitRadiusExpression() {
-  return isMobileLayout()
-    ? ["interpolate", ["linear"], ["zoom"], 2, 9, 6, 13, 10, 18]
-    : ["interpolate", ["linear"], ["zoom"], 2, 6, 6, 9, 10, 13];
 }
 
 function datasetBounds(withMargin = 0) {
@@ -686,6 +693,7 @@ function restoreDetailScroll(placeId = detailPlaceId, tab = state.detailTab) {
 
 function keepFocusedDetailControlVisible(control) {
   const alignControl = () => {
+    if (!control.isConnected || document.activeElement !== control) return;
     control.scrollIntoView({
       block: "center",
       inline: "nearest",
@@ -729,8 +737,7 @@ function revealActiveScrollItem(container) {
   const active = container.querySelector(".is-active, [aria-selected='true']");
   if (!active) return;
 
-  const activeKey = active.getAttribute("data-reference-book")
-    || active.getAttribute("data-detail-tab")
+  const activeKey = active.getAttribute("data-detail-tab")
     || active.id
     || active.textContent?.trim()
     || "";
@@ -752,6 +759,13 @@ function ensureScrollEdgeResizeObserver() {
 
 function bindScrollEdgeContainers(root = document, { revealActive = false } = {}) {
   ensureScrollEdgeResizeObserver();
+  // Searches and place changes replace panels. Release their old DOM trees
+  // instead of retaining every rendered panel in the shared observer.
+  for (const element of scrollEdgeObservedElements) {
+    if (element.isConnected) continue;
+    scrollEdgeResizeObserver?.unobserve(element);
+    scrollEdgeObservedElements.delete(element);
+  }
 
   scrollEdgeConfigs.forEach(({ selector, axis }) => {
     const rootMatches = root instanceof Element && root.matches(selector) ? [root] : [];
@@ -763,7 +777,10 @@ function bindScrollEdgeContainers(root = document, { revealActive = false } = {}
       if (!element.dataset.scrollEdgeBound) {
         element.dataset.scrollEdgeBound = "true";
         element.addEventListener("scroll", () => syncScrollEdgeState(element), { passive: true });
-        scrollEdgeResizeObserver?.observe(element);
+      }
+      if (scrollEdgeResizeObserver && !scrollEdgeObservedElements.has(element)) {
+        scrollEdgeResizeObserver.observe(element);
+        scrollEdgeObservedElements.add(element);
       }
 
       syncScrollEdgeState(element);
@@ -798,22 +815,60 @@ function sheetVisibleHeight() {
 
 function mapViewPadding() {
   if (!isMobileLayout()) {
-    return { top: 44, right: 34, bottom: 34, left: 34 };
+    const mapRect = mapStage.getBoundingClientRect();
+    const listRect = openDrawer === "places" ? placesPanel.getBoundingClientRect() : null;
+    const listOverlapsMap = listRect && listRect.left < mapRect.right && listRect.right > mapRect.left;
+    const listPadding = listOverlapsMap ? Math.max(34, listRect.right - mapRect.left + 24) : 34;
+    return { top: 92, right: 104, bottom: 142, left: Math.min(Math.max(52, listPadding), mapRect.width * .56) };
   }
 
   const mapRect = mapStage.getBoundingClientRect();
   const headerRect = document.querySelector(".atlas-bar")?.getBoundingClientRect();
+  if (window.matchMedia(COMPACT_LANDSCAPE_MEDIA_QUERY).matches) {
+    return {
+      top: Math.round((headerRect?.bottom || 61) - mapRect.top + 28),
+      right: Math.round(Math.min(300, mapRect.width * .42) + 52),
+      bottom: 126,
+      left: 32
+    };
+  }
+  const compassRect = compassReset.getBoundingClientRect();
+  const topCompass = headerRect && compassRect.top < headerRect.bottom + 130;
+  const controlsBottom = Math.max(...[placesToggle, mapViewSwitcher].map((control) => control.getBoundingClientRect().bottom));
+  const legend = mapLegendBody.closest("details");
+  const legendRect = legend.getBoundingClientRect();
+  // Resolved CSS inset values can turn `bottom: auto` into a pixel distance.
+  // Use the visible toolbar position to distinguish the top and bottom key.
+  const legendAtTop = legendRect.top < controlsBottom + 8;
+  const scaleRect = mapStage.querySelector(".maplibregl-ctrl-scale")?.getBoundingClientRect();
+  const bottomClearance = legendAtTop
+    ? Math.max(132, scaleRect?.height ? mapRect.bottom - scaleRect.top + 70 : sheetVisibleHeight() + 64)
+    : mapRect.bottom - legendRect.bottom + legend.querySelector("summary").getBoundingClientRect().height + 80;
   const measuredTop = headerRect && mapRect.height
-    ? Math.max(0, headerRect.bottom - mapRect.top) + 14
-    : 122;
-  const maxTop = Math.max(24, mapRect.height * 0.42);
+    ? Math.max(headerRect.bottom, controlsBottom) - mapRect.top + 64
+    : 212;
+  const maxTop = Math.max(24, mapRect.height * 0.55);
+  const top = Math.round(clamp(measuredTop, 24, maxTop));
 
   return {
-    top: Math.round(clamp(measuredTop, 24, maxTop)),
-    right: 18,
-    bottom: Math.round(sheetVisibleHeight() + 18),
-    left: 18
+    top,
+    right: 108,
+    bottom: Math.round(Math.min(bottomClearance, Math.max(24, mapRect.height - top - 64))),
+    left: topCompass ? 88 : 52
   };
+}
+
+function currentMapCamera() {
+  if (!mapLoaded || !map) return cameraState;
+  const center = map.getCenter();
+  return { center: [center.lng, center.lat], zoom: map.getZoom(), bearing: map.getBearing() };
+}
+
+function clearCameraLink() {
+  const wasActive = cameraUrlActive;
+  cameraUrlActive = false;
+  cameraState = null;
+  if (wasActive) requestUrlSync("replace");
 }
 
 function urlForCurrentState({ clean = false, includeImplicitPlace = false } = {}) {
@@ -846,13 +901,40 @@ function urlForCurrentState({ clean = false, includeImplicitPlace = false } = {}
   if (serializePlace && hasShareableDetailTab) {
     url.searchParams.set("tab", state.detailTab);
   }
+  if (cameraUrlActive) {
+    const camera = serializeMapCamera(currentMapCamera());
+    if (camera) url.searchParams.set(CAMERA_QUERY_PARAM, camera);
+  }
   return url;
 }
 
 function durableHistoryState(extra = {}) {
   const nextState = { ...currentHistoryState() };
   delete nextState.bibleMapOverlay;
-  return { ...nextState, bibleMapView: true, ...extra };
+  delete nextState.bibleMapOverlayBase;
+  return {
+    ...nextState,
+    bibleMapView: true,
+    bibleMapEntryId: nextState.bibleMapEntryId || newHistoryEntryId(),
+    bibleMapUi: historyUiSnapshot(),
+    ...extra
+  };
+}
+
+function historyUiSnapshot() {
+  return {
+    sheet: state.placeSheet,
+    coordinateStack: activeCoordinateStackKey,
+    journeyGuideOpen: state.journeyGuideOpen,
+    referenceBook: state.referenceBook,
+    referenceSearch: state.referenceSearch,
+    referenceLimit: state.referenceLimit,
+    placeOrder: state.placeOrder
+  };
+}
+
+function newHistoryEntryId() {
+  return window.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function flushPendingUrlSync() {
@@ -863,20 +945,20 @@ function flushPendingUrlSync() {
   const mode = requestedMode === "push" && url.href !== window.location.href ? "push" : "replace";
 
   try {
-    window.history[`${mode}State`](durableHistoryState(), "", url.href);
+    window.history[`${mode}State`](durableHistoryState(mode === "push" ? { bibleMapEntryId: newHistoryEntryId() } : {}), "", url.href);
   } catch {
     // URL state is an enhancement; the app remains usable if history writes are unavailable.
   }
 }
 
 function requestUrlSync(mode = "replace") {
-  if (!urlStateReady || restoringUrlState) return;
+  if (!urlStateReady || restoringUrlState || restoringHistoryView) return;
   pendingUrlMode = pendingUrlMode === "push" || mode === "push" ? "push" : "replace";
 
   if (overlayHistoryActive && isOverlayHistoryState() && !overlayHistoryReleasePending) {
     try {
       window.history.replaceState(
-        durableHistoryState({ bibleMapOverlay: true }),
+        durableHistoryState({ bibleMapOverlay: activeMobileOverlayKind(), bibleMapOverlayBase: overlayHistoryBaseId }),
         "",
         urlForCurrentState().href
       );
@@ -892,6 +974,13 @@ function requestUrlSync(mode = "replace") {
 function frameCurrentUrlState(animated = false) {
   if (!mapLoaded || !map) {
     urlFramePending = true;
+    return;
+  }
+
+  if (cameraUrlActive && cameraState) {
+    mapFrameIntent = null;
+    map.easeTo({ ...cameraState, padding: mapViewPadding(), duration: animated ? motionDuration(500) : 0 });
+    urlFramePending = false;
     return;
   }
 
@@ -916,10 +1005,11 @@ function frameCurrentUrlState(animated = false) {
   urlFramePending = false;
 }
 
-function restoreUrlStateFromLocation({ frame = true } = {}) {
+function restoreUrlStateFromLocation({ frame = true, syncUrl = true } = {}) {
   if (!allPlaces.length) return;
   const params = new URL(window.location.href).searchParams;
-  const route = storyRoutes.find((item) => item.id === params.get("route")) || null;
+  const savedUi = currentHistoryState().bibleMapUi || {};
+  let route = storyRoutes.find((item) => item.id === params.get("route")) || null;
   const testament = ["OT", "NT"].includes(params.get("testament")) ? params.get("testament") : "all";
   const confidence = confidenceOrder.includes(params.get("confidence")) ? params.get("confidence") : "all";
   const requestedBook = params.get("book");
@@ -928,18 +1018,27 @@ function restoreUrlStateFromLocation({ frame = true } = {}) {
   const type = uniqueTypes().some((item) => item.type === requestedType) ? requestedType : "all";
   const requestedPlace = params.get("place");
   const explicitPlace = requestedPlace && placesById.has(requestedPlace) ? requestedPlace : null;
+  // Older shared links could combine a journey with an unrelated selection.
+  // Keep that selected record available in the atlas instead of losing it.
+  if (route && explicitPlace && !route.locations.includes(explicitPlace)) route = null;
   const requestedTab = params.get("tab");
   const requestedMapView = normalizeMapViewId(params.get(MAP_VIEW_QUERY_PARAM));
+  const requestedCamera = parseMapCamera(params.get(CAMERA_QUERY_PARAM));
 
   restoringUrlState = true;
   try {
+    activeCoordinateStackKey = null;
     state.testament = testament;
     state.book = book;
     state.confidence = confidence;
     state.type = type;
     state.route = route?.id || null;
+    state.journeyGuideOpen = Boolean(route && savedUi.journeyGuideOpen);
+    state.placeOrder = normalizePlaceOrder(savedUi.placeOrder);
     state.search = (params.get("q") || "").trim().slice(0, 160);
     state.mapView = mapViewById(requestedMapView).id;
+    cameraState = requestedCamera;
+    cameraUrlActive = Boolean(requestedCamera);
     selectedPlaceUrlActive = Boolean(explicitPlace);
 
     if (explicitPlace) {
@@ -954,11 +1053,12 @@ function restoreUrlStateFromLocation({ frame = true } = {}) {
     }
 
     state.detailTab = explicitPlace && detailTabs.includes(requestedTab) ? requestedTab : "overview";
-    state.referenceBook = "all";
-    state.referenceSearch = "";
-    state.referenceLimit = REFERENCE_PAGE_SIZE;
+    state.referenceBook = typeof savedUi.referenceBook === "string" ? savedUi.referenceBook : "all";
+    state.referenceSearch = typeof savedUi.referenceSearch === "string" ? savedUi.referenceSearch.slice(0, 160) : "";
+    state.referenceLimit = Number.isInteger(savedUi.referenceLimit) ? clamp(savedUi.referenceLimit, REFERENCE_PAGE_SIZE, 100000) : REFERENCE_PAGE_SIZE;
     state.placeListLimit = PLACE_LIST_PAGE_SIZE;
-    state.placeSheet = "peek";
+    const savedSheet = savedUi.sheet;
+    state.placeSheet = isMobileLayout() && (savedSheet === "full" || savedSheet !== "peek" && explicitPlace && state.detailTab !== "overview") ? "full" : "peek";
     detailPlaceId = state.selectedId;
     renderAll({ urlMode: null });
   } finally {
@@ -966,9 +1066,41 @@ function restoreUrlStateFromLocation({ frame = true } = {}) {
   }
 
   if (mapLoaded) beginMapViewLoadAnnouncement();
-  requestUrlSync("replace");
+  if (syncUrl) requestUrlSync("replace");
   urlFramePending = frame;
   if (urlFramePending && mapLoaded) frameCurrentUrlState(true);
+}
+
+function restoreHistoryView({ frame = true } = {}) {
+  const saved = currentHistoryState();
+  const kind = isMobileLayout() && ["details", "places", "filters", "about", "route"].includes(saved.bibleMapOverlay) ? saved.bibleMapOverlay : null;
+  overlayHistoryActive = Boolean(kind && saved.bibleMapOverlayBase);
+  overlayHistoryBaseId = overlayHistoryActive ? saved.bibleMapOverlayBase : null;
+  pendingUrlMode = null;
+  restoringHistoryView = true;
+  try { runWithOverlayHistoryPaused(() => {
+    closeDrawers();
+    closeRouteMenu();
+    restoreUrlStateFromLocation({ frame: false, syncUrl: false });
+    if (kind === "details") {
+      setPlaceSheetState("full", { animate: false });
+      requestAnimationFrame(() => mobilePlaceSummary.focus({ preventScroll: true }));
+    } else if (kind === "route") openRouteMenu(true);
+    else if (kind) {
+      if (kind === "places" && typeof saved.bibleMapUi?.coordinateStack === "string") {
+        const key = saved.bibleMapUi.coordinateStack;
+        if ((groupPlacesByCoordinate(visiblePlacesCache).get(key)?.length || 0) > 1) activeCoordinateStackKey = key;
+      }
+      if (kind === "places") renderPlacesPanel(visiblePlacesCache);
+      setDrawer(kind, true);
+    }
+    // Finish dialog layout before restoring the camera. A drawer's padding
+    // animation must not cancel a Back/Forward destination halfway through.
+    if (frame && mapLoaded) map.stop();
+  }); } finally { restoringHistoryView = false; }
+  urlFramePending = frame;
+  if (frame && mapLoaded) frameCurrentUrlState(false);
+  requestUrlSync("replace");
 }
 
 async function writeClipboardText(value) {
@@ -994,15 +1126,32 @@ function showShareFeedback(message, copied) {
   shareStatus.textContent = message;
   shareButtonText.textContent = copied ? "Copied" : "Try again";
   shareButton.classList.toggle("is-copied", copied);
+  shareButton.classList.add("has-feedback");
+  shareButton.querySelector("use")?.setAttribute("href", copied ? "#icon-check" : "#icon-link");
   shareFeedbackTimer = window.setTimeout(() => {
     shareStatus.textContent = "";
     shareButtonText.textContent = "Share";
     shareButton.classList.remove("is-copied");
+    shareButton.classList.remove("has-feedback");
+    shareButton.querySelector("use")?.setAttribute("href", "#icon-link");
   }, 2200);
 }
 
 async function copyCurrentViewLink() {
   try {
+    if (mapLoaded && map) {
+      if (map.isMoving() && mapFrameIntent) syncMapPadding(0);
+      map.stop();
+    }
+    mapFrameIntent = null;
+    const camera = currentMapCamera();
+    if (camera) {
+      cameraState = camera;
+      cameraUrlActive = true;
+    }
+    if (state.selectedId) selectedPlaceUrlActive = true;
+    // The address bar remains a complete fallback if clipboard access fails.
+    requestUrlSync("replace");
     await writeClipboardText(urlForCurrentState({ clean: true, includeImplicitPlace: true }).href);
     showShareFeedback("Link copied to clipboard.", true);
   } catch {
@@ -1023,6 +1172,13 @@ function hasDismissibleMobileOverlay() {
   return isMobileLayout() && (Boolean(openDrawer) || !routeMenu.hidden || state.placeSheet !== "peek");
 }
 
+function activeMobileOverlayKind() {
+  if (!isMobileLayout()) return null;
+  if (openDrawer) return openDrawer;
+  if (!routeMenu.hidden) return "route";
+  return state.placeSheet === "full" ? "details" : null;
+}
+
 function runWithOverlayHistoryPaused(callback) {
   const wasPaused = overlayHistorySyncPaused;
   overlayHistorySyncPaused = true;
@@ -1034,16 +1190,29 @@ function runWithOverlayHistoryPaused(callback) {
 }
 
 function ensureOverlayHistoryEntry() {
-  if (overlayHistoryActive || overlayHistoryReleasePending || !hasDismissibleMobileOverlay()) return;
+  if (!urlStateReady || overlayHistoryReleasePending || !hasDismissibleMobileOverlay()) return;
+  if (overlayHistoryActive) {
+    try {
+      window.history.replaceState(durableHistoryState({ bibleMapOverlay: activeMobileOverlayKind(), bibleMapOverlayBase: overlayHistoryBaseId }), "", window.location.href);
+    } catch { /* History is optional in restricted browsing contexts. */ }
+    return;
+  }
 
   try {
+    const base = durableHistoryState({ bibleMapUi: currentHistoryState().bibleMapUi || { sheet: "peek" } });
+    window.history.replaceState(base, "", window.location.href);
     window.history.pushState({
-      ...currentHistoryState(),
-      bibleMapOverlay: true
+      ...base,
+      bibleMapEntryId: newHistoryEntryId(),
+      bibleMapUi: historyUiSnapshot(),
+      bibleMapOverlay: activeMobileOverlayKind(),
+      bibleMapOverlayBase: base.bibleMapEntryId
     }, "", window.location.href);
     overlayHistoryActive = true;
+    overlayHistoryBaseId = base.bibleMapEntryId;
   } catch {
     overlayHistoryActive = false;
+    overlayHistoryBaseId = null;
   }
 }
 
@@ -1052,12 +1221,14 @@ function releaseOverlayHistoryEntry() {
 
   if (closingOverlayFromHistory) {
     overlayHistoryActive = false;
+    overlayHistoryBaseId = null;
     overlayHistoryReleasePending = false;
     return;
   }
 
   if (!isOverlayHistoryState()) {
     overlayHistoryActive = false;
+    overlayHistoryBaseId = null;
     overlayHistoryReleasePending = false;
     return;
   }
@@ -1069,13 +1240,14 @@ function releaseOverlayHistoryEntry() {
   } catch {
     suppressNextOverlayPop = false;
     overlayHistoryActive = false;
+    overlayHistoryBaseId = null;
     overlayHistoryReleasePending = false;
     flushPendingUrlSync();
   }
 }
 
 function syncOverlayHistory() {
-  if (overlayHistorySyncPaused) return;
+  if (overlayHistorySyncPaused || restoringUrlState) return;
 
   if (hasDismissibleMobileOverlay()) {
     ensureOverlayHistoryEntry();
@@ -1083,22 +1255,21 @@ function syncOverlayHistory() {
   }
 
   releaseOverlayHistoryEntry();
+  if (!overlayHistoryActive && !overlayHistoryReleasePending && urlStateReady) {
+    try { window.history.replaceState(durableHistoryState(), "", window.location.href); } catch { /* Keep the view usable without history storage. */ }
+  }
 }
 
 function syncPlaceSheetSummaryState() {
   if (!hasSelectedPlace()) {
     mobilePlaceSummary.setAttribute("aria-expanded", "false");
-    mobilePlaceSummary.setAttribute("aria-label", "No selected place details");
+    mobilePlaceSummary.removeAttribute("aria-label");
     mobilePlaceSummaryAction.textContent = "Details";
     return;
   }
   const detailsOpen = isMobileLayout() && state.placeSheet === "full" && hasSelectedPlace();
-  const title = mobilePlaceSummaryTitle.textContent?.trim() || "selected place";
   mobilePlaceSummary.setAttribute("aria-expanded", String(detailsOpen));
-  mobilePlaceSummary.setAttribute(
-    "aria-label",
-    detailsOpen ? `Back to map from ${title}` : `Open details for ${title}`
-  );
+  mobilePlaceSummary.removeAttribute("aria-label");
   mobilePlaceSummaryAction.textContent = detailsOpen ? "Map" : "Details";
 }
 
@@ -1128,7 +1299,16 @@ function syncPlaceDetailSurface() {
   }
 
   placeDetailScrim.hidden = !detailsOpen;
+  syncPlaceSummaryHeight();
   syncOverlayInert();
+}
+
+function syncPlaceSummaryHeight() {
+  if (!isMobileLayout() || !hasSelectedPlace() || state.placeSheet === "full") return false;
+  const height = `${Math.ceil(inspectorPanel.getBoundingClientRect().height)}px`;
+  if (document.body.style.getPropertyValue("--place-peek-height") === height) return false;
+  document.body.style.setProperty("--place-peek-height", height);
+  return true;
 }
 
 function setPlaceSheetState(nextState, { updateMapPadding = true, animate = true } = {}) {
@@ -1146,7 +1326,7 @@ function setPlaceSheetState(nextState, { updateMapPadding = true, animate = true
   syncPlaceDetailSurface();
 
   if (updateMapPadding && mapLoaded && map) {
-    map.easeTo({ padding: mapViewPadding(), duration: animate ? motionDuration(220) : 0 });
+    syncMapPadding(animate ? motionDuration(220) : 0);
   }
   syncDetailScrollState();
   requestAnimationFrame(syncDetailScrollState);
@@ -1170,7 +1350,7 @@ function dismissScrollContainerForKind(kind) {
   if (kind === "filters") return filterPanel.querySelector(".filter-stack");
   if (kind === "places") return placeList;
   if (kind === "about") return aboutContent;
-  if (kind === "route") return routeMenu;
+  if (kind === "route") return routeMenu.querySelector(".route-menu-options");
   return null;
 }
 
@@ -1281,14 +1461,10 @@ function endDismissDrag(event) {
   clearDismissDragStyles(drag.panel);
 }
 
-function focusRenderedDetailTab(tab, previousInspectorScrollTop) {
+function focusRenderedDetailTab(tab) {
   requestAnimationFrame(() => {
     const target = detailCard.querySelector(`[role="tab"][data-detail-tab="${tab}"]`);
     target?.focus({ preventScroll: true });
-    if (Number.isFinite(previousInspectorScrollTop)) {
-      const maxScroll = Math.max(0, inspectorPanel.scrollHeight - inspectorPanel.clientHeight);
-      inspectorPanel.scrollTop = clamp(previousInspectorScrollTop, 0, maxScroll);
-    }
   });
 }
 
@@ -1299,17 +1475,19 @@ function setDetailTab(
   { restoreFocus = false } = {}
 ) {
   if (!detailTabs.includes(tab) || !place) return false;
-  const previousInspectorScrollTop = inspectorPanel.scrollTop;
   const previousTab = state.detailTab;
   const changedTab = state.detailTab !== tab;
   if (!changedTab) {
-    if (restoreFocus) focusRenderedDetailTab(tab, previousInspectorScrollTop);
+    if (restoreFocus) focusRenderedDetailTab(tab);
     return false;
   }
 
   if (changedTab) rememberDetailScroll(place.id, previousTab);
+  const nextScrollTop = detailScrollPositions.get(detailScrollKey(place.id, tab)) || 0;
   state.detailTab = tab;
+  detailCard.dataset.tab = tab;
   selectedPlaceUrlActive = true;
+  syncDocumentTitle();
   if (tab === "references" && state.referenceLimit < REFERENCE_PAGE_SIZE) {
     state.referenceLimit = REFERENCE_PAGE_SIZE;
   }
@@ -1325,8 +1503,6 @@ function setDetailTab(
   if (!canUpdateInPlace) {
     renderDetails(place, visiblePlaces);
   } else {
-    const previousDetailScrollTop = detailCard.scrollTop;
-
     renderedTabs.forEach((button) => {
       const active = button.dataset.detailTab === tab;
       button.classList.toggle("is-active", active);
@@ -1337,14 +1513,16 @@ function setDetailTab(
       panel.hidden = panel.id !== `detail-panel-${tab}`;
     });
 
-    const maxScrollAfter = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
-    detailCard.scrollTop = clamp(previousDetailScrollTop, 0, maxScrollAfter);
-    syncDetailScrollState();
-    requestAnimationFrame(syncDetailScrollState);
   }
 
+  // Each tab starts at its beginning and retains its own reading position.
+  // Reusing the previous tab's offset can skip a new panel's controls entirely.
+  detailCard.scrollTop = clamp(nextScrollTop, 0, Math.max(0, detailCard.scrollHeight - detailCard.clientHeight));
+  syncDetailScrollState();
+  requestAnimationFrame(syncDetailScrollState);
+
   requestUrlSync("replace");
-  if (restoreFocus) focusRenderedDetailTab(tab, previousInspectorScrollTop);
+  if (restoreFocus) focusRenderedDetailTab(tab);
   return changedTab;
 }
 
@@ -1367,24 +1545,52 @@ function handleDetailTabKeydown(event, place, visiblePlaces) {
 }
 
 function fitDefaultView(animated = false) {
+  clearCameraLink();
   if (!mapLoaded || !map) return;
+  mapFrameIntent = { kind: "atlas" };
   map.fitBounds(datasetBounds(), {
     padding: mapViewPadding(),
+    absolutePadding: true,
     duration: animated ? motionDuration(700) : 0
   });
 }
 
-function focusOnLocations(ids, animated = true) {
-  if (!mapLoaded || !map) return;
+function syncMapPadding(duration = motionDuration(180)) {
+  if (!mapLoaded || !map || restoringHistoryView) return;
+  // Padding-only easing cancels a running fit. Finish its destination before
+  // a drawer changes the layout, so quick interactions cannot strand the map.
+  if (map.isMoving() && mapFrameIntent?.kind === "atlas") fitDefaultView(false);
+  else if (map.isMoving() && mapFrameIntent?.kind === "places") focusOnLocations(mapFrameIntent.ids, false);
+  else map.easeTo({ padding: mapViewPadding(), duration });
+}
+
+function fitCurrentPlaces(animated = false) {
+  const route = getActiveRoute();
+  const routePlaces = route ? visibleRoutePlaces(route, visiblePlacesCache) : [];
+  if (routePlaces.length) {
+    focusOnLocations(routePlaces.map((place) => place.id), animated);
+  } else if ((activeSearchLabel() || hasActivePlaceFilters()) && visiblePlacesCache.length) {
+    focusOnLocations(visiblePlacesCache.map((place) => place.id), animated);
+  } else {
+    fitDefaultView(animated);
+  }
+}
+
+function focusOnLocations(ids, animated = true, { preserveZoom = false, minimumZoom = null } = {}) {
   const points = ids.map((id) => placeById(id)).filter(Boolean);
   if (!points.length) return;
+  clearCameraLink();
+  if (!mapLoaded || !map) return;
+  mapFrameIntent = { kind: "places", ids: points.map((place) => place.id) };
 
   if (points.length === 1) {
     const place = points[0];
     const broadType = ["region", "island", "body of water", "river"].some((type) => place.types.includes(type));
+    const zoom = Math.max(broadType ? 6 : 9, preserveZoom ? map.getZoom() : 0);
+    if (preserveZoom) mapFrameIntent = null;
     map.easeTo({
       center: [place.lng, place.lat],
-      zoom: broadType ? 5.4 : 7.5,
+      zoom,
       padding: mapViewPadding(),
       duration: animated ? motionDuration(700) : 0
     });
@@ -1399,10 +1605,19 @@ function focusOnLocations(ids, animated = true) {
     return accumulator;
   }, null);
 
-  map.fitBounds(bounds, {
+  const fitOptions = {
     padding: mapViewPadding(),
+    absolutePadding: true,
+    maxZoom: 11.5,
     duration: animated ? motionDuration(760) : 0
-  });
+  };
+  const fitted = Number.isFinite(minimumZoom) ? map.cameraForBounds(bounds, fitOptions) : null;
+  if (fitted && fitted.zoom < minimumZoom) {
+    // A small viewport can fit a group back into the same cluster. Drilling
+    // down must still advance the scale, like the atlas's native clusters.
+    mapFrameIntent = null;
+    map.easeTo({ ...fitted, zoom: Math.min(minimumZoom, map.getMaxZoom()), duration: fitOptions.duration });
+  } else map.fitBounds(bounds, fitOptions);
 }
 
 function centerPlaceFromDetails(placeId) {
@@ -1410,52 +1625,25 @@ function centerPlaceFromDetails(placeId) {
     setPlaceSheetState("peek");
     mapStage.focus({ preventScroll: true });
   }
-  focusOnLocations([placeId], true);
+  focusOnLocations([placeId], true, { preserveZoom: true });
 }
 
-function selectPlaceFromDetailNav(placeId, preferredFocusId) {
-  selectPlace(placeId, { focusMap: true });
-  requestAnimationFrame(() => {
-    const preferredTarget = document.getElementById(preferredFocusId);
-    const fallbackTarget = document.getElementById("detailFocusButton");
-    const focusTarget = preferredTarget && !preferredTarget.disabled
-      ? preferredTarget
-      : fallbackTarget || mobilePlaceSummary;
-    focusTarget?.focus({ preventScroll: true });
-  });
+function selectPlaceFromDetailNav(placeId) {
+  selectPlace(placeId, { focusMap: true, preserveTab: true });
+  const focusTarget = document.getElementById("detailPlaceTitle") || mobilePlaceSummary;
+  focusTarget.focus({ preventScroll: true });
 }
 
-function revealSelectedDetails() {
-  if (!placeById(state.selectedId) || !inspectorPanel) return;
-  if (openDrawer) closeDrawers();
-
-  if (isMobileLayout()) {
-    setPlaceSheetState(state.placeSheet === "full" ? "peek" : "full");
-    requestAnimationFrame(() => mobilePlaceSummary.focus({ preventScroll: true }));
-    return;
-  }
-
-  const targetTop = Math.max(0, inspectorPanel.getBoundingClientRect().top + window.scrollY - 8);
-  window.scrollTo({
-    top: targetTop,
-    behavior: scrollBehavior()
-  });
-
-  const focusInspector = () => {
-    inspectorPanel.focus({ preventScroll: true });
-  };
-  requestAnimationFrame(() => {
-    focusInspector();
-    window.setTimeout(() => {
-      if (document.activeElement !== inspectorPanel) focusInspector();
-    }, 80);
-  });
-}
-
-function selectPlace(id, { focusMap = false, revealSheet = false } = {}) {
+function selectPlace(id, { focusMap = false, revealSheet = false, preserveTab = false } = {}) {
   if (!id || !placesById.has(id)) return;
+  if (revealSheet && openDrawer === "places") closeDrawers();
   const changedPlace = state.selectedId !== id;
   if (changedPlace) rememberDetailScroll();
+  if (changedPlace && preserveTab) {
+    const tab = state.detailTab;
+    ensureDetailState(placeById(id));
+    state.detailTab = tab;
+  }
   const targetSheet = revealSheet && isMobileLayout() ? "peek" : null;
   state.selectedId = id;
   selectedPlaceUrlActive = true;
@@ -1473,14 +1661,20 @@ function clearPlaceSelection() {
   state.placeSheet = "peek";
   renderAll({ urlMode: "push" });
   if (mapLoaded && map) {
-    map.easeTo({ padding: mapViewPadding(), duration: motionDuration(180) });
+    syncMapPadding();
   }
   return true;
 }
 
 function selectPlaceFromList(id) {
+  const sharedPointChoice = Boolean(activeCoordinateStackKey);
+  if (sharedPointChoice && mapLoaded) {
+    mapFrameIntent = null;
+    cameraState = currentMapCamera();
+    cameraUrlActive = true;
+  }
   closeDrawers();
-  selectPlace(id, { focusMap: true, revealSheet: true });
+  selectPlace(id, { focusMap: !sharedPointChoice, revealSheet: true });
   if (isMobileLayout()) {
     requestAnimationFrame(() => {
       mobilePlaceSummary.focus({ preventScroll: true });
@@ -1509,7 +1703,8 @@ function syncMobileOverlayPlacement() {
   restoreAnchoredElement(inspectorPanel, inspectorPanelAnchor);
   restoreAnchoredElement(placeDetailScrim, placeDetailScrimAnchor);
   restoreAnchoredElement(placesBackdrop, placesBackdropAnchor);
-  restoreAnchoredElement(placesPanel, placesPanelAnchor);
+  const workspace = document.querySelector(".atlas-workspace");
+  if (placesPanel.parentNode !== workspace) workspace.append(placesPanel);
   restoreAnchoredElement(routeMenu, routeMenuAnchor);
   restoreAnchoredElement(filterPanel, filterPanelAnchor);
   restoreAnchoredElement(aboutPanel, aboutPanelAnchor);
@@ -1535,7 +1730,8 @@ function syncOverlayInert() {
       ((filtersOpen || aboutOpen) && sheetModalSiblings.includes(element))
       || (detailsOpen && placeDetailModalSiblings.includes(element))
       || (placesModalOpen && element === placesMapPanel)
-      || (placesOpen && placesModalSiblings.includes(element))
+      || (placesModalOpen && placesModalSiblings.includes(element))
+      || (placesOpen && element === inspectorPanel)
       || (routeOpen && routeModalSiblings.includes(element))
       || (isMobileLayout() && !hasSelectedPlace() && element === inspectorPanel)
     );
@@ -1547,7 +1743,7 @@ function syncOverlayInert() {
     }
   });
 
-  if (placesOpen) {
+  if (placesModalOpen) {
     mapStage.setAttribute("tabindex", "-1");
   } else if (mapStageTabIndex === null) {
     mapStage.removeAttribute("tabindex");
@@ -1559,6 +1755,22 @@ function syncOverlayInert() {
   // the close button inside the modal remains the keyboard-accessible action.
   placesBackdrop.setAttribute("tabindex", "-1");
   placesBackdrop.setAttribute("aria-hidden", "true");
+}
+
+function focusOpenedDrawer(name, panel, preferredTarget) {
+  const focus = () => {
+    if (openDrawer !== name || panel.contains(document.activeElement)) return;
+    preferredTarget()?.focus({ preventScroll: true });
+  };
+  focus();
+  requestAnimationFrame(() => {
+    focus();
+    // A visibility transition can still make the panel unfocusable on its
+    // first frame. Retry when its own animations finish, without stealing
+    // focus from someone who has already started using the dialog.
+    const animations = panel.getAnimations?.() || [];
+    if (animations.length) Promise.allSettled(animations.map((animation) => animation.finished)).then(focus);
+  });
 }
 
 function setDrawer(name, open) {
@@ -1607,7 +1819,7 @@ function setDrawer(name, open) {
   placesPanel.setAttribute("aria-hidden", String(!placesOpen));
   aboutPanel.setAttribute("aria-hidden", String(!aboutOpen));
   filterPanel.setAttribute("aria-modal", String(filtersOpen));
-  placesPanel.setAttribute("aria-modal", String(placesOpen));
+  placesPanel.setAttribute("aria-modal", String(placesOpen && isMobileLayout()));
   aboutPanel.setAttribute("aria-modal", String(aboutOpen));
   filterToggle.setAttribute("aria-expanded", String(filtersOpen));
   placesToggle.setAttribute("aria-expanded", String(placesOpen));
@@ -1616,9 +1828,11 @@ function setDrawer(name, open) {
 
   syncOverlayInert();
 
-  if (filtersOpen) filterClose.focus({ preventScroll: true });
-  if (placesOpen) placesClose.focus({ preventScroll: true });
-  if (aboutOpen) aboutClose.focus({ preventScroll: true });
+  const openingFocus = filtersOpen ? filterClose : placesOpen ? placesClose : aboutOpen ? aboutClose : null;
+  if (openingFocus) {
+    focusOpenedDrawer(name, dismissPanelForKind(name), () => placesOpen && activeCoordinateStackKey
+      ? placeList.querySelector("[data-place]") || openingFocus : openingFocus);
+  }
   if (placesOpen) {
     requestAnimationFrame(() => {
       renderPlacesPanel(visiblePlacesCache);
@@ -1633,6 +1847,9 @@ function setDrawer(name, open) {
   if (!hasOpenPanel && drawerReturnFocus) {
     drawerReturnFocus.focus({ preventScroll: true });
     drawerReturnFocus = null;
+  }
+  if (mapLoaded && (previousDrawer === "places" || placesOpen)) {
+    syncMapPadding();
   }
   syncOverlayHistory();
 }
@@ -1730,6 +1947,13 @@ function closeTopMobileOverlay({ fromHistory = false } = {}) {
       return true;
     }
 
+    if (mapLegend.open) {
+      mapLegend.open = false;
+      const legendSummary = mapLegend.querySelector("summary");
+      (getComputedStyle(legendSummary).visibility === "hidden" ? mapViewDismiss : legendSummary).focus({ preventScroll: true });
+      return true;
+    }
+
     return false;
   } finally {
     closingOverlayFromHistory = wasClosingFromHistory;
@@ -1740,31 +1964,33 @@ function handleHistoryPopState(event) {
   if (suppressNextOverlayPop) {
     suppressNextOverlayPop = false;
     overlayHistoryActive = false;
+    overlayHistoryBaseId = null;
     overlayHistoryReleasePending = false;
     flushPendingUrlSync();
     return;
   }
 
-  if (overlayHistoryActive) {
+  if (overlayHistoryActive && event.state?.bibleMapEntryId === overlayHistoryBaseId) {
     overlayHistoryActive = false;
+    overlayHistoryBaseId = null;
     overlayHistoryReleasePending = false;
     closeTopMobileOverlay({ fromHistory: true });
+    // Closing a reader with Back must retain its Forward entry. Persist any
+    // in-overlay selection on the underlying map with replace, never push.
+    if (pendingUrlMode) pendingUrlMode = "replace";
     flushPendingUrlSync();
     return;
   }
 
-  if (event.state?.bibleMapOverlay) {
-    try {
-      window.history.replaceState(durableHistoryState(), "", window.location.href);
-    } catch {
-      // A stale transient history marker can safely be ignored.
-    }
-  }
-  if (urlStateReady) restoreUrlStateFromLocation({ frame: true });
+  overlayHistoryActive = false;
+  overlayHistoryBaseId = null;
+  overlayHistoryReleasePending = false;
+  if (urlStateReady) restoreHistoryView({ frame: true });
 }
 
 function handleViewportChange() {
   syncViewportMetrics();
+  syncSearchControls();
   const mobile = isMobileLayout();
   const layoutChanged = mobile !== mobileLayoutActive;
   syncMobileOverlayPlacement();
@@ -1777,22 +2003,27 @@ function handleViewportChange() {
   }
   syncPlaceSheetSummaryState();
   syncPlaceDetailSurface();
-  syncMapGestureMode();
   syncAllScrollEdgeStates();
 
   if (!routeMenu.hidden) {
+    routeMenu.setAttribute("aria-modal", String(mobile));
     routeMenuScrim.hidden = !isMobileLayout();
     document.body.classList.toggle("route-menu-open", isMobileLayout());
     syncOverlayInert();
   }
+  placesPanel.setAttribute("aria-modal", String(openDrawer === "places" && mobile));
 
   if (!map) return;
   map.resize();
   if (mapLoaded) {
-    if (layoutChanged && map.getLayer(HIT_LAYER_ID)) {
-      map.setPaintProperty(HIT_LAYER_ID, "circle-radius", hitRadiusExpression());
+    if (layoutChanged) {
+      for (const [layer, radius] of [[HIT_LAYER_ID, atlasHitRadius(mobile)], [CLUSTER_HIT_LAYER_ID, atlasClusterHitRadius(mobile)], [COORDINATE_STACK_HIT_LAYER_ID, atlasStackHitRadius(mobile)]]) {
+        if (map.getLayer(layer)) map.setPaintProperty(layer, "circle-radius", radius);
+      }
     }
-    map.easeTo({ padding: mapViewPadding(), duration: 0 });
+    if (mapFrameIntent?.kind === "atlas") fitDefaultView(false);
+    else if (mapFrameIntent?.kind === "places") focusOnLocations(mapFrameIntent.ids, false);
+    else map.easeTo({ padding: mapViewPadding(), duration: 0 });
     collapseCompactMapAttribution();
   }
 }
@@ -1805,24 +2036,10 @@ function scheduleViewportChange() {
   });
 }
 
-function syncMapGestureMode() {
-  if (!map?.cooperativeGestures) return;
-
-  try {
-    if (isMobileLayout()) {
-      map.cooperativeGestures.disable();
-    } else {
-      map.cooperativeGestures.enable();
-    }
-  } catch {
-    // Gesture mode updates are best-effort across MapLibre versions.
-  }
-}
-
 function revealRouteOption(option, { force = false } = {}) {
   if (!option || routeMenu.hidden) return;
 
-  const menuRect = routeMenu.getBoundingClientRect();
+  const menuRect = (routeMenu.querySelector(".route-menu-options") || routeMenu).getBoundingClientRect();
   const optionRect = option.getBoundingClientRect();
   const isVisible = optionRect.top >= menuRect.top + 8 && optionRect.bottom <= menuRect.bottom - 8;
   if (!force && isVisible) return;
@@ -1852,6 +2069,7 @@ function openRouteMenu(focusSelected = false) {
     document.body.classList.add("route-menu-open");
     routePickerButton.setAttribute("aria-expanded", "true");
     routeMenu.hidden = false;
+    routeMenu.setAttribute("aria-modal", String(isMobileLayout()));
     routeMenuScrim.hidden = !isMobileLayout();
     syncOverlayInert();
   });
@@ -1883,6 +2101,8 @@ function handleRouteSelection(routeId) {
   const previousRoute = state.route;
   const previousSelectedId = state.selectedId;
   state.route = routeId || null;
+  if (previousRoute !== state.route) state.journeyGuideOpen = false;
+  activeCoordinateStackKey = null;
   const route = getActiveRoute();
 
   if (route) {
@@ -1897,13 +2117,7 @@ function handleRouteSelection(routeId) {
   const changedView = previousRoute !== state.route || previousSelectedId !== state.selectedId;
   renderAll({ urlMode: changedView ? "push" : "replace" });
 
-  if (route) {
-    const visibleIds = new Set(getVisiblePlaces().map((place) => place.id));
-    const ids = route.locations.filter((id) => visibleIds.has(id));
-    if (ids.length) focusOnLocations(ids, true);
-  } else {
-    fitDefaultView(true);
-  }
+  fitCurrentPlaces(true);
 }
 
 function selectRouteOption(routeId) {
@@ -1913,6 +2127,7 @@ function selectRouteOption(routeId) {
 }
 
 function handleRouteMenuKeydown(event) {
+  if (event.target instanceof Element && event.target.closest("#routeMenuClose") && event.key !== "Escape") return;
   const options = [...routeMenu.querySelectorAll("[data-route-option]")];
   const activeOption = document.activeElement.closest?.("[data-route-option]")
     || routeMenu.querySelector("[data-route-option][tabindex='0']")
@@ -1985,9 +2200,16 @@ function bindRoutePicker() {
 }
 
 function renderRoutePicker() {
+  const focusedRoute = routeMenu.contains(document.activeElement)
+    ? document.activeElement.closest("[data-route-option]")?.dataset.routeOption
+    : undefined;
+  const closeHadFocus = document.activeElement.id === "routeMenuClose";
+  const previousScroll = routeMenu.querySelector(".route-menu-options")?.scrollTop || 0;
   const selected = getCurrentRouteOption();
-  routePickerText.textContent = selected.title;
-  routeMenu.innerHTML = getRouteOptions().map((option) => {
+  routePickerText.textContent = "Journeys";
+  routePickerButton.setAttribute("aria-label", selected.id ? `Journeys: ${selected.title} selected; choose a journey` : "Journeys: explore journey guides");
+  routePickerButton.title = selected.id ? selected.title : "Explore journey guides";
+  const optionsMarkup = getRouteOptions().map((option) => {
     const isSelected = option.id === (state.route || "");
     return `
       <button
@@ -2003,18 +2225,34 @@ function renderRoutePicker() {
       </button>
     `;
   }).join("");
+  routeMenu.innerHTML = `
+    <div class="route-menu-head drawer-head">
+      <h2 id="routeMenuTitle">Choose a journey</h2>
+      <button class="icon-button" id="routeMenuClose" type="button" aria-label="Close journey guides">${iconMarkup("close")}</button>
+    </div>
+    <div class="route-menu-options" role="listbox" aria-label="Journey guides">${optionsMarkup}</div>
+  `;
+  document.getElementById("routeMenuClose").addEventListener("click", () => closeRouteMenu(true));
+  if (!routeMenu.hidden) {
+    routeMenu.querySelector(".route-menu-options").scrollTop = previousScroll;
+    if (closeHadFocus) document.getElementById("routeMenuClose").focus({ preventScroll: true });
+    else if (focusedRoute !== undefined) {
+      const focusedOption = [...routeMenu.querySelectorAll("[data-route-option]")]
+        .find((option) => option.dataset.routeOption === focusedRoute);
+      focusRouteOption(focusedOption);
+    }
+  }
   bindRoutePicker();
 }
 
 function renderAfterFilterControlChange(container, dataKey, value) {
   renderAll();
+  const target = [...container.querySelectorAll(`[data-${dataKey}]`)]
+    .find((button) => button.dataset[dataKey] === value);
+  if (!(target instanceof HTMLElement)) return;
+  target.focus({ preventScroll: true });
   requestAnimationFrame(() => {
     if (openDrawer !== "filters") return;
-    const target = [...container.querySelectorAll(`[data-${dataKey}]`)]
-      .find((button) => button.dataset[dataKey] === value);
-    if (!(target instanceof HTMLElement)) return;
-
-    target.focus({ preventScroll: true });
     target.scrollIntoView({
       block: "nearest",
       inline: "nearest",
@@ -2030,6 +2268,10 @@ function buildFilterChip(label, active, dataset, className = "toggle-chip", pref
 
 function renderStaticControls() {
   renderRoutePicker();
+  const noun = getActiveRoute() ? "stop" : "place";
+  const facets = placeFilterFacets(placesInJourney(allPlaces, getActiveRoute()), state, (place) => !activeSearchQuery || searchMatchesById.has(place.id));
+  const books = [...facets.books].sort(([a], [b]) => bookSort(a, b));
+  const types = [...facets.types].sort(([a, countA], [b, countB]) => countB - countA || collator.compare(a, b));
 
   testamentFilters.innerHTML = [
     buildFilterChip("All", state.testament === "all", 'data-testament="all"'),
@@ -2043,7 +2285,7 @@ function renderStaticControls() {
     ...confidenceOrder.map((key) => {
       const meta = confidenceMeta[key];
       return buildFilterChip(
-        `${meta.label} (${meta.range})`,
+        meta.label,
         state.confidence === key,
         `data-confidence="${key}"`,
         "toggle-chip era-chip",
@@ -2052,24 +2294,30 @@ function renderStaticControls() {
     })
   ].join("");
 
-  bookFilters.innerHTML = [
-    `<button class="book-chip${state.book === "all" ? " is-active" : ""}" type="button" aria-pressed="${state.book === "all"}" data-book="all">All books</button>`,
-    ...uniqueBooks().map((book) => `
-      <button class="book-chip${state.book === book ? " is-active" : ""}" type="button" aria-pressed="${state.book === book}" data-book="${escapeHtml(book)}">
-        ${escapeHtml(book)}
-      </button>
-    `)
-  ].join("");
+  bookFilters.innerHTML = `
+    <label class="book-filter-select" for="globalBookFilter">
+      <span class="sr-only">Bible book</span>
+      <select id="globalBookFilter">
+        <option value="all" ${state.book === "all" ? "selected" : ""}>All Bible books</option>
+        ${books.map(([book, count]) => `<option value="${escapeHtml(book)}" ${state.book === book ? "selected" : ""}>${escapeHtml(bookLabelsById.get(book) || book)} (${pluralize(count, noun)})</option>`).join("")}
+      </select>
+    </label>
+  `;
+  document.getElementById("globalBookFilter").addEventListener("change", (event) => {
+    state.book = event.currentTarget.value;
+    renderAll();
+    document.getElementById("globalBookFilter").focus({ preventScroll: true });
+  });
 
   typeFilters.innerHTML = [
     `<button class="character-button${state.type === "all" ? " is-active" : ""}" type="button" aria-pressed="${state.type === "all"}" data-type="all">
-      <span class="character-copy"><strong>All types</strong></span>
+      <span class="character-copy"><strong>All types</strong><small>${pluralize(facets.allTypeCount, noun)}</small></span>
     </button>`,
-    ...uniqueTypes().map(({ type, count }) => `
+    ...types.map(([type, count]) => `
       <button class="character-button${state.type === type ? " is-active" : ""}" type="button" aria-pressed="${state.type === type}" data-type="${escapeHtml(type)}">
         <span class="character-copy">
           <strong>${escapeHtml(typeLabel(type))}</strong>
-          <small>${count.toLocaleString("en-US")}</small>
+          <small>${pluralize(count, noun)}</small>
         </span>
       </button>
     `)
@@ -2089,12 +2337,6 @@ function renderStaticControls() {
     });
   });
 
-  bookFilters.querySelectorAll("[data-book]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.book = button.dataset.book;
-      renderAfterFilterControlChange(bookFilters, "book", state.book);
-    });
-  });
 
   typeFilters.querySelectorAll("[data-type]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2105,15 +2347,17 @@ function renderStaticControls() {
 }
 
 function renderActiveFilters(visiblePlaces) {
+  const route = getActiveRoute();
   const tokens = getActiveFilterTokens();
-  activeFilterCount.textContent = String(tokens.length);
-  activeFilterCount.hidden = tokens.length === 0;
-  syncFilterDrawerActions(visiblePlaces, tokens);
+  const filterCount = [state.testament, state.book, state.confidence, state.type].filter((value) => value !== "all").length;
+  activeFilterCount.textContent = String(filterCount);
+  activeFilterCount.hidden = filterCount === 0;
+  syncFilterDrawerActions(visiblePlaces);
   syncSearchControls();
 
   if (!tokens.length) {
     activeFilters.innerHTML = `
-      <span class="filter-summary-label">${visiblePlaces.length.toLocaleString("en-US")} mapped places</span>
+      <span class="filter-summary-label">${route ? `${pluralize(visiblePlaces.length, "journey stop")}` : `${pluralize(visiblePlaces.length, "mapped place")}`}</span>
     `;
     return;
   }
@@ -2124,20 +2368,25 @@ function renderActiveFilters(visiblePlaces) {
     `<span class="filter-summary-label is-filtered">Filtered</span>`,
     ...visibleTokens.map((token) => `<span class="tag">${escapeHtml(token)}</span>`),
     remainder ? `<span class="tag">+${remainder}</span>` : "",
-    `<span class="status-pill">${pluralize(visiblePlaces.length, "place")}</span>`,
+    `<span class="status-pill">${pluralize(visiblePlaces.length, route ? "stop" : "place")}</span>`,
     `<button class="filter-reset-pill" type="button" data-clear-active-filters>Reset</button>`
   ].filter(Boolean).join(" ");
 }
 
-function syncFilterDrawerActions(visiblePlaces, tokens = getActiveFilterTokens()) {
-  const resultLabel = `Show ${pluralize(visiblePlaces.length, "place")}`;
+function syncFilterDrawerActions(visiblePlaces) {
+  const resultLabel = `Show ${pluralize(visiblePlaces.length, getActiveRoute() ? "stop" : "place")}`;
   filterDone.textContent = resultLabel;
   filterDone.setAttribute("aria-label", `${resultLabel} and close filters`);
-  clearFilters.disabled = tokens.length === 0;
+  clearFilters.disabled = !hasActivePlaceFilters();
   clearFilters.setAttribute(
     "aria-label",
-    tokens.length ? "Reset search and filters" : "No search or filters to reset"
+    hasActivePlaceFilters() ? "Reset filters" : "Reset filters: no filters to reset"
   );
+  const query = activeSearchLabel();
+  const route = getActiveRoute();
+  document.getElementById("filterContext").hidden = !(route || query);
+  document.getElementById("filterContextText").textContent = [route ? route.title : "", query ? `Search: “${query}”` : ""].filter(Boolean).join(" · ");
+  document.getElementById("filterClearSearch").hidden = !query;
 }
 
 function formatNumber(value) {
@@ -2315,7 +2564,36 @@ function evidenceNotesMarkup(modern) {
 
 function renderReferenceChip(reference) {
   const readable = typeof reference === "string" ? reference : reference.readable;
-  return `<span class="ref-chip">${escapeHtml(readable)}</span>`;
+  const passage = typeof reference === "object" && reference.bookLabel && reference.chapter && reference.verse
+    ? `${reference.bookLabel} ${reference.chapter}:${reference.verse}`
+    : readable;
+  const href = `https://www.biblegateway.com/passage/?search=${encodeURIComponent(passage)}&version=ESV`;
+  const key = typeof reference === "object" ? reference.osis || readable : readable;
+  return `<a class="ref-chip" data-reference-key="${escapeHtml(key)}" href="${escapeHtml(href)}" target="_blank" rel="noreferrer" title="Read in the ESV on Bible Gateway">${escapeHtml(readable)}<span class="sr-only"> — read in the ESV on Bible Gateway, opens in a new tab</span></a>`;
+}
+
+function overviewLocationNote(place) {
+  if (place.confidence === "unknown") return "The source does not establish a reliable location.";
+  if (place.candidateCount > 1) return `${formatNumber(place.candidateCount)} locations have been proposed. This is the source's highest-scored candidate.`;
+  const role = place.bestIdentification?.resolution?.lonlatType;
+  if (role === "representative point") return "This point represents a larger region or a route.";
+  if (role === "center") return "This marks the center of an approximate possible area.";
+  if (role === "settlement") return "The exact position within this settlement is uncertain.";
+  return "The source maps this place to a single location.";
+}
+
+function renderPlaceContext(place) {
+  const context = placeContext[place.id];
+  if (!context) return "";
+  const references = referenceDetailsForPlace(place);
+  const passages = context.references
+    .map((readable) => references.find((reference) => reference.readable === readable))
+    .filter(Boolean);
+  return `<section class="place-context" aria-labelledby="placeContextTitle">
+    <h3 id="placeContextTitle">Biblical context</h3>
+    <p>${escapeHtml(context.summary)}</p>
+    <div class="reference-line">${passages.map(renderReferenceChip).join("")}</div>
+  </section>`;
 }
 
 function renderTopBooks(place, limit = 5) {
@@ -2330,43 +2608,27 @@ function renderTopBooks(place, limit = 5) {
       ${books.map((book) => {
         const width = Math.max(9, Math.round((book.count / max) * 100));
         return `
-          <div class="book-bar" style="--bar-width:${width}%;">
+          <button class="book-bar book-link" type="button" style="--bar-width:${width}%;" data-overview-book="${escapeHtml(book.bookId)}" aria-label="${escapeHtml(book.bookLabel || book.bookId)} ${pluralize(book.count, "reference")}: show passages">
             <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
             <strong>${formatNumber(book.count)}</strong>
-          </div>
+          </button>
         `;
       }).join("")}
     </div>
   `;
 }
 
-function renderReferenceBookStrip(place) {
-  const books = referenceBookCounts(place);
+function renderReferenceBookFilter(place) {
+  const books = referenceBookCounts(place).sort((a, b) => bookSort(a.bookId, b.bookId));
   if (!books.length) return "";
-
   return `
-    <div class="reference-book-strip" role="group" aria-label="Filter this place's references by book">
-      <button
-        class="reference-book-chip${state.referenceBook === "all" ? " is-active" : ""}"
-        type="button"
-        aria-pressed="${state.referenceBook === "all"}"
-        data-reference-book="all"
-      >
-        <span>All books</span>
-        <strong>${formatNumber(referenceDetailsForPlace(place).length)}</strong>
-      </button>
-      ${books.map((book) => `
-        <button
-          class="reference-book-chip${state.referenceBook === book.bookId ? " is-active" : ""}"
-          type="button"
-          aria-pressed="${state.referenceBook === book.bookId}"
-          data-reference-book="${escapeHtml(book.bookId)}"
-        >
-          <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
-          <strong>${formatNumber(book.count)}</strong>
-        </button>
-      `).join("")}
-    </div>
+    <label class="reference-book-select" for="referenceBookSelect">
+      <span>Bible book</span>
+      <select id="referenceBookSelect">
+        <option value="all" ${state.referenceBook === "all" ? "selected" : ""}>All books (${formatNumber(referenceDetailsForPlace(place).length)})</option>
+        ${books.map((book) => `<option value="${escapeHtml(book.bookId)}" ${state.referenceBook === book.bookId ? "selected" : ""}>${escapeHtml(book.bookLabel || book.bookId)} (${formatNumber(book.count)})</option>`).join("")}
+      </select>
+    </label>
   `;
 }
 
@@ -2422,7 +2684,7 @@ function renderDetailTabs(activeTab) {
   const labels = {
     overview: "Overview",
     references: "References",
-    evidence: "Identification"
+    evidence: "Location"
   };
 
   return `
@@ -2443,22 +2705,6 @@ function renderDetailTabs(activeTab) {
       `).join("")}
     </div>
   `;
-}
-
-function referenceMatchesSearch(reference, search) {
-  if (!search) return true;
-  return [
-    reference.readable,
-    reference.osis,
-    reference.bookId,
-    reference.bookLabel,
-    reference.testament,
-    reference.chapter,
-    reference.verse
-  ].filter((value) => value !== null && value !== undefined)
-    .join(" ")
-    .toLowerCase()
-    .includes(search);
 }
 
 function groupReferenceResults(references) {
@@ -2507,6 +2753,9 @@ function groupReferenceResults(references) {
 function renderReferenceResultContent(place) {
   const search = state.referenceSearch.trim().toLowerCase();
   const allReferences = referenceDetailsForPlace(place).slice().sort((a, b) => a.sort - b.sort);
+  if (!allReferences.length) {
+    return `<div class="empty-state">OpenBible supplies no verse references for this related historical record. See Location for its mapped point and source.</div>`;
+  }
   const scopedReferences = state.referenceBook === "all"
     ? allReferences
     : allReferences.filter((reference) => reference.bookId === state.referenceBook);
@@ -2524,21 +2773,22 @@ function renderReferenceResultContent(place) {
   }
 
   const groups = groupReferenceResults(visible);
+  const multipleTestaments = new Set(filtered.map((reference) => reference.testament)).size > 1;
   return `
-    <p class="reference-result-count">
+    <p class="reference-result-count" ${search || activeBook || hidden ? "" : "hidden"}>
       Showing ${formatNumber(visible.length)} of ${formatNumber(filtered.length)} ${escapeHtml(scopeLabel)}.
     </p>
     ${groups.map((testamentGroup) => `
       <section class="reference-testament-group">
-        <h3>
+        <h3 ${multipleTestaments ? "" : 'class="sr-only"'}>
           ${escapeHtml(testamentMeta[testamentGroup.testament]?.label || "Other verse references")}
-          <span>${formatNumber(testamentGroup.count)}</span>
+          <span>${formatNumber(testamentGroup.count)}${hidden ? " shown" : ""}</span>
         </h3>
         ${testamentGroup.books.map((book, bookIndex) => `
-          <details class="reference-book" ${search || bookIndex < 2 ? "open" : ""}>
+          <details class="reference-book" data-reference-book-group="${escapeHtml(book.bookId)}" ${search || bookIndex < 2 ? "open" : ""}>
             <summary>
               <span>${escapeHtml(book.bookLabel || book.bookId)}</span>
-              <strong>${pluralize(book.count, "verse")}</strong>
+              <strong>${pluralize(book.count, "verse")}${hidden ? " shown" : ""}</strong>
               ${iconMarkup("chevron", "disclosure-icon")}
             </summary>
             <div class="reference-chapter-stack">
@@ -2568,10 +2818,23 @@ function renderReferenceResultContent(place) {
   `;
 }
 
-function renderReferenceResults(place, { restoreFocusToLoadMore = false, previousScrollTop = null } = {}) {
+function renderReferenceResults(place, { focusNewReferences = false, previousScrollTop = null } = {}) {
   const results = document.getElementById("referenceResults");
   if (!results) return;
+  const previousReferences = focusNewReferences
+    ? new Set([...results.querySelectorAll("[data-reference-key]")].map((link) => link.dataset.referenceKey))
+    : null;
+  const bookStates = focusNewReferences
+    ? new Map([...results.querySelectorAll("[data-reference-book-group]")].map((book) => [book.dataset.referenceBookGroup, book.open]))
+    : null;
   results.innerHTML = renderReferenceResultContent(place);
+  if (bookStates) {
+    results.querySelectorAll("[data-reference-book-group]").forEach((book) => {
+      if (bookStates.has(book.dataset.referenceBookGroup)) book.open = bookStates.get(book.dataset.referenceBookGroup);
+    });
+  }
+  const resultStatus = document.getElementById("referenceResultsStatus");
+  if (resultStatus) resultStatus.textContent = results.querySelector(".reference-result-count")?.textContent.trim() || "No verse references are supplied for this record.";
 
   const showMore = document.getElementById("referenceShowMoreButton");
   if (showMore) {
@@ -2579,9 +2842,10 @@ function renderReferenceResults(place, { restoreFocusToLoadMore = false, previou
       const scrollTopBeforeLoad = detailCard.scrollTop;
       state.referenceLimit += REFERENCE_PAGE_SIZE;
       renderReferenceResults(place, {
-        restoreFocusToLoadMore: true,
+        focusNewReferences: true,
         previousScrollTop: scrollTopBeforeLoad
       });
+      requestUrlSync("replace");
     });
   }
   bindScrollEdgeContainers(detailCard, { revealActive: true });
@@ -2592,10 +2856,13 @@ function renderReferenceResults(place, { restoreFocusToLoadMore = false, previou
       syncDetailScrollState();
     });
   }
-  if (restoreFocusToLoadMore) {
+  if (focusNewReferences) {
+    const nextReference = [...results.querySelectorAll("[data-reference-key]")].find((link) => !previousReferences.has(link.dataset.referenceKey));
+    const book = nextReference?.closest("details");
+    if (book) book.open = true;
     requestAnimationFrame(() => {
-      const nextShowMore = document.getElementById("referenceShowMoreButton");
-      nextShowMore?.focus({ preventScroll: true });
+      nextReference?.focus({ preventScroll: true });
+      nextReference?.scrollIntoView({ block: "nearest", behavior: "auto" });
     });
   }
   requestAnimationFrame(syncDetailScrollState);
@@ -2603,52 +2870,52 @@ function renderReferenceResults(place, { restoreFocusToLoadMore = false, previou
 
 function selectReferenceBook(book, place, visiblePlaces) {
   const previousScrollTop = detailCard.scrollTop;
-  const previousInspectorScrollTop = inspectorPanel.scrollTop;
   state.referenceBook = book || "all";
   state.referenceLimit = REFERENCE_PAGE_SIZE;
   renderDetails(place, visiblePlaces);
+  requestUrlSync("replace");
 
   requestAnimationFrame(() => {
-    const target = [...detailCard.querySelectorAll("[data-reference-book]")]
-      .find((button) => button.dataset.referenceBook === state.referenceBook);
-    target?.focus({ preventScroll: true });
+    document.getElementById("referenceBookSelect")?.focus({ preventScroll: true });
 
     const maxScroll = Math.max(0, detailCard.scrollHeight - detailCard.clientHeight);
     detailCard.scrollTop = clamp(previousScrollTop, 0, maxScroll);
-    const maxInspectorScroll = Math.max(0, inspectorPanel.scrollHeight - inspectorPanel.clientHeight);
-    inspectorPanel.scrollTop = clamp(previousInspectorScrollTop, 0, maxInspectorScroll);
     syncDetailScrollState();
   });
 }
 
 function renderDetails(place, visiblePlaces) {
   const shouldResetScroll = ensureDetailState(place);
+  detailCard.dataset.tab = state.detailTab;
+  const route = getActiveRoute();
 
   if (!place) {
     const hasVisiblePlaces = visiblePlaces.length > 0;
+    const featuredIds = [DEFAULT_SELECTED_PLACE_ID, "a112427", "a5feb15", "ae41ab4"];
+    const featured = featuredIds.map((id) => visiblePlaces.find((item) => item.id === id)).filter(Boolean);
+    const starters = (route ? visiblePlaces : featured.length ? featured : visiblePlaces).slice(0, 4);
     detailCard.innerHTML = `
-      <p class="section-label">Selected place</p>
-      <h2 class="detail-title">${hasVisiblePlaces ? "Select a place" : "No places found"}</h2>
+      <p class="section-label">Your field guide</p>
+      <h2 class="detail-title">${hasVisiblePlaces ? route ? "Choose a stop" : "Explore a place" : route ? "No matching stops" : "No matching places"}</h2>
       <div class="empty-state">
         ${hasVisiblePlaces
-          ? "Choose a marker on the map or open the place list to inspect its references and identification."
-          : "Adjust the filters or clear search to see mapped OpenBible places."}
+          ? route ? "Select a numbered stop on the map, or choose one from the stop list." : "Search a name or Bible reference, choose a journey, or select a place on the map."
+          : route ? "Try another search or reset the filters to see this journey's stops." : "Try a different search, or reset the filters to explore all places."}
       </div>
+      ${hasVisiblePlaces ? `<div class="start-places">${starters.map((item) => `<button class="journey-link" type="button" data-start-place="${escapeHtml(item.id)}"><span>${escapeHtml(displayPlaceName(item))}<small>${pluralize(item.verseCount, "verse reference")}</small></span>${iconMarkup("arrow-right")}</button>`).join("")}</div>` : `<button class="ghost-button" id="emptyResetFilters" type="button">Reset search & filters</button>`}
     `;
+    detailCard.querySelectorAll("[data-start-place]").forEach((button) => button.addEventListener("click", () => selectPlace(button.dataset.startPlace, { focusMap: true, revealSheet: true })));
+    document.getElementById("emptyResetFilters")?.addEventListener("click", () => resetSearchAndFilters({ fitMap: true }));
     if (shouldResetScroll) resetDetailScroll();
     return;
   }
 
-  const route = getActiveRoute();
   const routePosition = route && route.locations.includes(place.id)
     ? route.locations.indexOf(place.id) + 1
     : null;
-  const routeNote = routePosition
-    ? `<span class="route-step">Step ${routePosition} in ${escapeHtml(route.title)}</span>`
-    : "";
   const relatedRoutes = storyRoutes.filter((item) => item.locations.includes(place.id));
   const displayName = displayPlaceName(place);
-  const variantLabel = placeVariantLabel(place);
+  const variantLabel = route ? "" : placeVariantLabel(place);
   const variantChip = variantLabel ? `<span class="place-variant detail-variant">${escapeHtml(variantLabel)}</span>` : "";
   const bestCandidate = place.bestIdentification;
   const modern = bestCandidate?.modern;
@@ -2657,16 +2924,18 @@ function renderDetails(place, visiblePlaces) {
   const pointRole = pointRoleCopy(bestCandidate);
   const precision = modern?.precision;
   const identificationScore = bestCandidate?.identification?.score;
-  const testaments = place.testaments.map((testament) => testamentMeta[testament]?.label || testament).join(", ") || "No testament metadata";
+  const testaments = place.testaments.length === 2
+    ? "Old & New Testament"
+    : place.testaments.map((testament) => testamentMeta[testament]?.label || testament).join(", ") || "Related historical place";
   const referenceSummary = referenceSummaryForPlace(place);
   const alternatives = place.alternatives.length
     ? place.alternatives.map((alternative) => `
       <li>
         <strong>${escapeHtml(alternative.name || alternative.description || "Other possible location")}</strong>
-        <span>${escapeHtml(confidenceLabel(alternative.confidence))}${Number.isFinite(alternative.locationScore) ? ` / location score ${formatNumber(alternative.locationScore)}` : ""}</span>
+        <span>${escapeHtml(confidenceLabel(alternative.confidence))} location confidence</span>
       </li>
     `).join("")
-    : `<li><strong>No other possible locations in the imported record.</strong><span>OpenBible records this as a single best candidate.</span></li>`;
+    : "";
   const wikidataLink = place.links.wikidata
     ? externalLinkMarkup(`Wikidata ${place.links.wikidata.id}`, place.links.wikidata.url, "detail-link")
     : "";
@@ -2680,32 +2949,37 @@ function renderDetails(place, visiblePlaces) {
   const openBibleScore = openBibleScoreLine(place);
   const openBibleSourceCatalogue = openBibleSourceCatalogueLine(place);
   const openBibleScoringVotes = openBibleScoringVotesLine(place);
-  const mobileLayout = isMobileLayout();
-  const compactReferences = mobileLayout;
-  const distributionOpen = referenceSummary.total && !compactReferences ? "open" : "";
-  const currentIndex = visiblePlaces.findIndex((item) => item.id === place.id);
-  const canNavigateVisible = currentIndex >= 0 && visiblePlaces.length > 1;
-  const previousPlace = canNavigateVisible && currentIndex > 0 ? visiblePlaces[currentIndex - 1] : null;
-  const nextPlace = canNavigateVisible && currentIndex < visiblePlaces.length - 1 ? visiblePlaces[currentIndex + 1] : null;
+  const visibleIds = new Set(visiblePlaces.map((item) => item.id));
+  const visibleRouteCount = route?.locations.filter((id) => visibleIds.has(id)).length || 0;
+  const navigationPlaces = routePosition
+    ? route.locations.map(placeById).filter((item) => item && visibleIds.has(item.id))
+    : visiblePlaces;
+  const currentIndex = navigationPlaces.findIndex((item) => item.id === place.id);
+  const canNavigateVisible = currentIndex >= 0 && navigationPlaces.length > 1;
+  const previousPlace = canNavigateVisible && currentIndex > 0 ? navigationPlaces[currentIndex - 1] : null;
+  const nextPlace = canNavigateVisible && currentIndex < navigationPlaces.length - 1 ? navigationPlaces[currentIndex + 1] : null;
+  const navigationLabel = routePosition ? "journey stops" : "visible places";
+  const positionLabel = routePosition
+    ? visibleRouteCount < route.locations.length ? "visible stops" : "journey stops"
+    : "visible";
   const positionText = currentIndex >= 0
-    ? `${formatNumber(currentIndex + 1)} of ${formatNumber(visiblePlaces.length)} visible`
+    ? `${formatNumber(currentIndex + 1)} of ${formatNumber(navigationPlaces.length)} ${positionLabel}`
     : `${formatNumber(visiblePlaces.length)} visible`;
-  const centerMapAction = mobileLayout
-    ? ""
-    : `<button class="ghost-button" id="detailFocusButton" type="button" aria-label="Center map on ${escapeHtml(accessiblePlaceName(place))}">Center map</button>`;
+  const centerMapAction = `<button class="ghost-button" id="detailFocusButton" type="button" aria-label="Show on map: ${escapeHtml(accessiblePlaceName(place))}">${iconMarkup("fit")} Show on map</button>`;
   const detailActionsMarkup = `
     <div class="detail-actions">
       ${centerMapAction}
-      ${externalLinkMarkup("View source record", place.links.openBible, "ghost-button detail-action-link")}
+      ${externalLinkMarkup("Source record", place.links.openBible, "ghost-button detail-action-link")}
     </div>
   `;
   const visiblePlaceNavMarkup = `
-    <nav class="visible-place-nav" aria-label="Browse visible places">
+    <nav class="visible-place-nav" aria-label="Browse ${navigationLabel}">
       <button
         class="visible-nav-button"
         id="detailPreviousButton"
         type="button"
-        aria-label="Previous visible place"
+        aria-label="Previous ${routePosition ? "journey stop" : "visible place"}"
+        ${previousPlace ? `title="${escapeHtml(displayPlaceName(previousPlace))}"` : ""}
         ${previousPlace ? "" : "disabled"}
       >
         ${iconMarkup("arrow-left", "nav-arrow")}
@@ -2716,7 +2990,8 @@ function renderDetails(place, visiblePlaces) {
         class="visible-nav-button"
         id="detailNextButton"
         type="button"
-        aria-label="Next visible place"
+        aria-label="Next ${routePosition ? "journey stop" : "visible place"}"
+        ${nextPlace ? `title="${escapeHtml(displayPlaceName(nextPlace))}"` : ""}
         ${nextPlace ? "" : "disabled"}
       >
         <strong>Next</strong>
@@ -2725,23 +3000,38 @@ function renderDetails(place, visiblePlaces) {
     </nav>
   `;
 
-  detailCard.innerHTML = `
-    <p class="section-label">Selected place</p>
-    <div class="detail-head">
-      <div class="detail-subtitle">
-        <h2 class="detail-title">${escapeHtml(displayName)}</h2>
-        ${variantChip}
-        <span class="detail-region">${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(modernName)}</span>
+  const journeyGuideMarkup = route ? `
+    <section class="journey-reader" aria-label="Journey navigation">
+      <div class="journey-itinerary">
+        <button class="journey-guide-toggle" id="journeyGuideToggle" type="button" aria-expanded="${state.journeyGuideOpen}" aria-controls="journeyGuideContent"><span><small>Journey guide</small><strong>${escapeHtml(route.title)}</strong></span>${iconMarkup("chevron", "disclosure-icon")}</button>
+        <div id="journeyGuideContent" ${state.journeyGuideOpen ? "" : "hidden"}>
+        <p class="journey-description">${escapeHtml(route.description)}</p>
+        <p class="journey-map-note">The map connects selected places schematically; it does not trace an exact historical path.</p>
+        <ol class="journey-stops">${route.locations.map((id, index) => {
+          const stop = placeById(id);
+          return stop ? `<li><button class="journey-stop" type="button" data-journey-place="${escapeHtml(id)}" aria-current="${id === place.id}" ${visibleIds.has(id) ? "" : 'disabled title="Hidden by the current search or filters"'}><span>${index + 1}</span><span class="journey-stop-name">${escapeHtml(displayPlaceName(stop))}${visibleIds.has(id) ? "" : "<small>Hidden by filters</small>"}</span></button></li>` : "";
+        }).join("")}</ol>
+        <button class="text-action" id="detailLeaveJourney" type="button">${iconMarkup("arrow-left")} Back to atlas</button>
+        </div>
       </div>
-      ${routeNote}
+      ${visiblePlaceNavMarkup}
+    </section>
+  ` : "";
+
+  detailCard.innerHTML = `
+    <div class="place-identity">
+      <div class="place-eyebrow">${routePosition ? `<span class="place-journey-step">Stop ${routePosition}</span><span class="eyebrow-separator" aria-hidden="true"></span>` : ""}<span>${escapeHtml(placeTypeLabel(place))}</span><span class="eyebrow-separator" aria-hidden="true"></span><span>${escapeHtml(testaments)}</span></div>
+      <div class="detail-head">
+        <h2 class="detail-title" id="detailPlaceTitle" tabindex="-1">${escapeHtml(displayName)}</h2>
+        ${variantChip}
+      </div>
     </div>
-    <p class="detail-summary">
-      OpenBible maps this biblical place to <strong>${escapeHtml(candidateText)}</strong>.
-      The confidence band is <strong>${escapeHtml(confidenceLabel(place.confidence))}</strong>.
-    </p>
-    ${mobileLayout ? "" : detailActionsMarkup}
-    ${mobileLayout ? "" : visiblePlaceNavMarkup}
+    ${referenceSummary.total ? `<div class="place-numbers" role="group" aria-label="Scripture at a glance">
+      <button class="place-number" type="button" data-detail-tab="references" aria-controls="detail-panel-references"><strong>${formatNumber(referenceSummary.total)}</strong><span>verse ${referenceSummary.total === 1 ? "reference" : "references"}</span></button>
+      <button class="place-number" type="button" data-detail-tab="references" aria-controls="detail-panel-references"><strong>${formatNumber(referenceSummary.bookCount)}</strong><span>Bible ${referenceSummary.bookCount === 1 ? "book" : "books"}</span></button>
+    </div>` : `<p class="detail-summary">A related historical place in the source dataset. No verse references are supplied for this record.</p>`}
     ${renderDetailTabs(activeTab)}
+    ${journeyGuideMarkup}
     <section
       class="detail-tab-panel"
       id="detail-panel-overview"
@@ -2749,37 +3039,33 @@ function renderDetails(place, visiblePlaces) {
       aria-labelledby="detail-tab-overview"
       ${activeTab === "overview" ? "" : "hidden"}
     >
-      <div class="detail-meta-grid">
-        <div class="detail-stat">
-          <span>Confidence</span>
-          <strong><span class="confidence-pill confidence-${escapeHtml(place.confidence)}">${escapeHtml(confidenceLabel(place.confidence))}</span></strong>
-        </div>
-        <div class="detail-stat">
-          <span>Modern identification</span>
-          <strong>${escapeHtml(modernName)}</strong>
-        </div>
-        <div class="detail-stat">
-          <span>Verse references</span>
-          <strong>${escapeHtml(verseMetaLine(place))}</strong>
-        </div>
-        <div class="detail-stat">
-          <span>Testament</span>
-          <strong>${escapeHtml(testaments)}</strong>
-        </div>
-      </div>
-      <section class="detail-section">
-        <h3>Books with most references</h3>
+      ${renderPlaceContext(place)}
+      <section class="location-card" aria-label="Mapped location">
+        <p class="location-card-label">On the map</p>
+        <h3>${escapeHtml(modernName)}</h3>
+        <span class="confidence-pill confidence-${escapeHtml(place.confidence)}">${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} location confidence</span>
+        <p class="detail-note">${escapeHtml(overviewLocationNote(place))}</p>
+        <button class="text-action" type="button" data-detail-tab="evidence" aria-controls="detail-panel-evidence">Explore the identification ${iconMarkup("arrow-right")}</button>
+      </section>
+      ${referenceSummary.total ? `<section class="detail-section">
+        <div class="section-heading-row"><h3>In Scripture</h3><small>Most references</small></div>
         ${renderTopBooks(place, 5)}
         ${referenceSummary.total ? `
           <button class="ghost-button compact-action" type="button" data-detail-tab="references" aria-controls="detail-panel-references">
-            View verse references
+            Browse all references ${iconMarkup("arrow-right")}
           </button>
         ` : ""}
-      </section>
-      <section class="detail-section">
+      </section>` : ""}
+      ${referenceSummary.total > 0 && referenceSummary.total <= 12 ? `<section class="detail-section">
         <h3>Bible verse references</h3>
         ${renderReferencePreview(place)}
-      </section>
+      </section>` : ""}
+      ${relatedRoutes.length && !route ? `
+        <section class="detail-section">
+          <div class="section-heading-row"><h3>Journeys through here</h3></div>
+          ${relatedRoutes.map((item) => `<button class="journey-link" type="button" data-journey="${escapeHtml(item.id)}">${escapeHtml(item.title)} ${iconMarkup("arrow-right")}</button>`).join("")}
+        </section>
+      ` : ""}
     </section>
     <section
       class="detail-tab-panel"
@@ -2788,34 +3074,35 @@ function renderDetails(place, visiblePlaces) {
       aria-labelledby="detail-tab-references"
       ${activeTab === "references" ? "" : "hidden"}
     >
-      <div class="reference-dashboard">
-        <div class="reference-summary-strip" aria-label="Bible verse reference summary">
-          <span><strong>${formatNumber(referenceSummary.total)}</strong><small>references</small></span>
-          <span><strong>${formatNumber(referenceSummary.bookCount)}</strong><small>books</small></span>
-          <span><strong>${formatNumber(oldTestamentCount)}</strong><small>OT</small></span>
-          <span><strong>${formatNumber(newTestamentCount)}</strong><small>NT</small></span>
+      <div class="reference-dashboard" ${referenceSummary.total ? "" : "hidden"}>
+        <div class="reference-summary-strip" role="group" aria-label="References by testament">
+          <span><strong>${formatNumber(oldTestamentCount)}</strong><small>Old Testament</small></span>
+          <span><strong>${formatNumber(newTestamentCount)}</strong><small>New Testament</small></span>
         </div>
-        ${renderReferenceBookStrip(place)}
+        <div class="reference-controls">
+        ${renderReferenceBookFilter(place)}
         <label class="reference-search" for="referenceSearchInput">
-          <span>Search this place's references</span>
+          <span>Find a passage</span>
           <input
             id="referenceSearchInput"
             type="search"
             value="${escapeHtml(state.referenceSearch)}"
-            placeholder="Book, chapter, or verse"
+            placeholder="e.g. Genesis 12:1"
             enterkeyhint="search"
             autocomplete="off"
             autocapitalize="none"
             spellcheck="false"
           >
         </label>
-        <p class="detail-note reference-help">This list shows Bible verse references only; it does not include full Bible text.</p>
+        </div>
+        <p class="detail-note reference-help">Open a reference to read the passage in the ESV on Bible Gateway.</p>
       </div>
       <section class="detail-section reference-results-section">
-        <h3>Verse references</h3>
+        <h3 class="sr-only">Verse references</h3>
+        <p class="sr-only" id="referenceResultsStatus" role="status" aria-live="polite" aria-atomic="true"></p>
         <div class="reference-results" id="referenceResults">${renderReferenceResultContent(place)}</div>
       </section>
-      <details class="detail-section reference-book-distribution" ${distributionOpen}>
+      <details class="detail-section reference-book-distribution" ${referenceSummary.total ? "" : "hidden"}>
         <summary>
           <span>References by book</span>
           <strong>${pluralize(referenceSummary.bookCount, "book")}</strong>
@@ -2831,26 +3118,25 @@ function renderDetails(place, visiblePlaces) {
       aria-labelledby="detail-tab-evidence"
       ${activeTab === "evidence" ? "" : "hidden"}
     >
-      <div class="detail-meta-grid">
-        <div class="detail-stat">
-          <span>Modern location</span>
-          <strong>${escapeHtml(modernName)}</strong>
-        </div>
-        <div class="detail-stat">
-          <span>Mapped-location confidence</span>
-          <strong>${escapeHtml(openBibleScore)}</strong>
-        </div>
-        <div class="detail-stat">
-          <span>Latitude, longitude</span>
-          <strong>${escapeHtml(coordinateText(place))}</strong>
-        </div>
-        <div class="detail-stat">
-          <span>Candidate locations</span>
-          <strong>${formatNumber(place.candidateCount)}</strong>
-        </div>
-      </div>
-      <section class="detail-section">
-        <h3>Mapped identification</h3>
+      <section class="location-card identification-card" aria-label="Mapped identification">
+        <p class="location-card-label">Modern identification</p>
+        <h3>${escapeHtml(modernName)}</h3>
+        <span class="confidence-pill confidence-${escapeHtml(place.confidence)}">${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} location confidence</span>
+        <p class="detail-note">${escapeHtml(overviewLocationNote(place))}</p>
+        <dl class="location-facts">
+          <div><dt>Map point</dt><dd>${escapeHtml(pointRole.title)}</dd></div>
+          <div><dt>Coordinates</dt><dd>${escapeHtml(coordinateText(place))}</dd></div>
+        </dl>
+      </section>
+      ${alternatives ? `<section class="detail-section">
+        <div class="section-heading-row"><h3>Other proposals</h3><small>${pluralize(place.candidateCount, "candidate")} in source</small></div>
+        <ul class="alternative-list">${alternatives}</ul>
+        ${place.candidateCount > place.alternatives.length + 1
+          ? `<p class="detail-note">Showing ${formatNumber(place.alternatives.length)} of ${pluralize(place.candidateCount - 1, "other candidate")}. The source record has the full list.</p>`
+          : ""}
+      </section>` : ""}
+      <details class="detail-section source-disclosure">
+        <summary><span>How this location was chosen</span>${iconMarkup("chevron", "disclosure-icon")}</summary>
         <p class="detail-note">${escapeHtml(candidateText)}</p>
         <dl class="evidence-list">
           <div>
@@ -2879,28 +3165,23 @@ function renderDetails(place, visiblePlaces) {
             <dd>${coordinateSourceMarkup(modern)}</dd>
           </div>
         </dl>
-      </section>
-      ${evidenceNotesMarkup(modern)}
-      <section class="detail-section">
-        <h3>Other candidate locations</h3>
-        <ul class="alternative-list">${alternatives}</ul>
-        ${place.candidateCount > place.alternatives.length + 1
-          ? `<p class="detail-note">Showing the three highest-scored alternatives out of ${formatNumber(place.candidateCount)} candidates in the pinned record.</p>`
-          : ""}
-      </section>
-      <section class="detail-section">
-        <h3>How this identification was scored</h3>
+        ${evidenceNotesMarkup(modern)}
+      </details>
+      <details class="detail-section source-disclosure">
+        <summary><span>Confidence & source scoring</span>${iconMarkup("chevron", "disclosure-icon")}</summary>
+        <p class="source-score"><strong>${escapeHtml(openBibleScore)}</strong><span>Mapped-location score in OpenBible</span></p>
         <p class="detail-note">
           The mapped-location score combines OpenBible's identification confidence with any resolution-path adjustment.
           ${escapeHtml(openBibleScoringVotes)} Votes can support or oppose a location.
           ${openBibleSourceCatalogue ? escapeHtml(openBibleSourceCatalogue) : ""}
           These are OpenBible model details, not Bible Map user votes or Bible verse counts.
         </p>
-      </section>
+        ${place.alternatives.some((alternative) => Number.isFinite(alternative.locationScore)) ? `<ul class="score-list">${place.alternatives.map((alternative) => `<li><span>${escapeHtml(alternative.name || alternative.description || "Alternative")}</span><strong>${Number.isFinite(alternative.locationScore) ? formatNumber(alternative.locationScore) : "—"}</strong></li>`).join("")}</ul>` : ""}
+      </details>
       ${relatedRoutes.length ? `
         <section class="detail-section">
-          <h3>Related route guides</h3>
-          <div class="detail-chip-row">${relatedRoutes.map((item) => `<span class="small-chip">${escapeHtml(item.title)}</span>`).join("")}</div>
+        <h3>Related journeys</h3>
+          ${relatedRoutes.map((item) => `<button class="journey-link" type="button" data-journey="${escapeHtml(item.id)}">${escapeHtml(item.title)} ${iconMarkup("arrow-right")}</button>`).join("")}
         </section>
       ` : ""}
       <section class="detail-section">
@@ -2913,24 +3194,50 @@ function renderDetails(place, visiblePlaces) {
         <p class="detail-source-note">Place data imported from OpenBible.info Bible Geocoding Data, ${escapeHtml(sourceMeta.license)}. Markup has been stripped and the record has been reshaped for this app.</p>
       </section>
     </section>
-    ${mobileLayout ? `
       <footer class="mobile-detail-footer">
         ${detailActionsMarkup}
-        ${visiblePlaceNavMarkup}
+        ${routePosition ? "" : visiblePlaceNavMarkup}
       </footer>
-    ` : ""}
   `;
 
   if (shouldResetScroll) resetDetailScroll();
 
   document.getElementById("detailFocusButton")?.addEventListener("click", () => centerPlaceFromDetails(place.id));
+  document.getElementById("journeyGuideToggle")?.addEventListener("click", (event) => {
+    if (state.route === route.id && event.currentTarget.isConnected) {
+      state.journeyGuideOpen = !state.journeyGuideOpen;
+      event.currentTarget.setAttribute("aria-expanded", String(state.journeyGuideOpen));
+      document.getElementById("journeyGuideContent").hidden = !state.journeyGuideOpen;
+      syncDetailScrollState();
+      syncScrollEdgeState(detailCard);
+      requestUrlSync("replace");
+    }
+  });
+  document.getElementById("detailLeaveJourney")?.addEventListener("click", () => {
+    if (isMobileLayout()) setPlaceSheetState("peek", { updateMapPadding: false, animate: false });
+    handleRouteSelection(null);
+    mapStage.focus({ preventScroll: true });
+  });
+  detailCard.querySelectorAll("[data-overview-book]").forEach((button) => {
+    button.addEventListener("click", () => {
+      setDetailTab("references", place, visiblePlaces, { restoreFocus: true });
+      selectReferenceBook(button.dataset.overviewBook, place, visiblePlaces);
+      requestAnimationFrame(() => { detailCard.scrollTop = 0; });
+    });
+  });
+  detailCard.querySelectorAll("[data-journey]").forEach((button) => {
+    button.addEventListener("click", () => handleRouteSelection(button.dataset.journey));
+  });
+  detailCard.querySelectorAll("[data-journey-place]").forEach((button) => {
+    button.addEventListener("click", () => selectPlaceFromDetailNav(button.dataset.journeyPlace));
+  });
   document.getElementById("detailPreviousButton").addEventListener("click", () => {
     if (!previousPlace) return;
-    selectPlaceFromDetailNav(previousPlace.id, "detailPreviousButton");
+    selectPlaceFromDetailNav(previousPlace.id);
   });
   document.getElementById("detailNextButton").addEventListener("click", () => {
     if (!nextPlace) return;
-    selectPlaceFromDetailNav(nextPlace.id, "detailNextButton");
+    selectPlaceFromDetailNav(nextPlace.id);
   });
 
   detailCard.querySelectorAll("[data-detail-tab]").forEach((button) => {
@@ -2943,20 +3250,21 @@ function renderDetails(place, visiblePlaces) {
     }
   });
 
+  const referenceBookSelect = document.getElementById("referenceBookSelect");
+  referenceBookSelect?.addEventListener("change", () => {
+    state.referenceBook = referenceBookSelect.value;
+    state.referenceLimit = REFERENCE_PAGE_SIZE;
+    renderReferenceResults(place);
+  });
   const referenceSearchInput = document.getElementById("referenceSearchInput");
   if (referenceSearchInput) {
     referenceSearchInput.addEventListener("input", () => {
       state.referenceSearch = referenceSearchInput.value;
       state.referenceLimit = REFERENCE_PAGE_SIZE;
       renderReferenceResults(place);
+      requestUrlSync("replace");
     });
   }
-
-  detailCard.querySelectorAll("[data-reference-book]").forEach((button) => {
-    button.addEventListener("click", () => {
-      selectReferenceBook(button.dataset.referenceBook, place, visiblePlaces);
-    });
-  });
 
   renderReferenceResults(place);
   requestAnimationFrame(syncDetailScrollState);
@@ -2983,18 +3291,13 @@ function searchReasonMarkup(reason, hiddenReasonCount = 0) {
   `;
 }
 
-function renderPlaceRow(place, index, className = "") {
-  const variant = placeVariantLabel(place);
+function renderPlaceRow(place, className = "") {
+  const variant = getActiveRoute() ? "" : placeVariantLabel(place);
   const selected = state.selectedId === place.id;
   const searchReasons = searchReasonsForPlace(place);
   const visibleSearchReasons = searchReasons.slice(0, 2);
   const hiddenSearchReasonCount = searchReasons.length - visibleSearchReasons.length;
-  const searchDescription = searchReasons
-    .map((reason) => `${reason.label}: ${reason.value}${reason.detail ? `, ${reason.detail}` : ""}`)
-    .join("; ");
-  const accessibleLabel = searchDescription
-    ? `${accessiblePlaceName(place)}. Search match: ${searchDescription}.`
-    : accessiblePlaceName(place);
+  const journeyStep = (getActiveRoute()?.locations.indexOf(place.id) ?? -1) + 1;
   const classes = [
     "place-row",
     selected ? "is-selected" : "",
@@ -3003,18 +3306,18 @@ function renderPlaceRow(place, index, className = "") {
     className
   ].filter(Boolean).join(" ");
   return `
-    <button class="${escapeHtml(classes)}" type="button" data-place="${escapeHtml(place.id)}" aria-current="${selected}" aria-label="${escapeHtml(accessibleLabel)}">
-      <span class="place-index">${String(index + 1).padStart(2, "0")}</span>
+    <button class="${escapeHtml(classes)}" type="button" data-place="${escapeHtml(place.id)}" aria-current="${selected}">
+      ${journeyStep ? `<span class="place-step" aria-label="Stop ${journeyStep}">${journeyStep}</span>` : ""}
       <div class="place-row-copy">
-        <small>${escapeHtml(typeLabel(place.types[0]))} / ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")}</small>
         <strong>${escapeHtml(displayPlaceName(place))}</strong>
+        <small>${escapeHtml(placeTypeLabel(place))} · ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence</small>
         ${variant ? `<span class="place-variant">${escapeHtml(variant)}</span>` : ""}
         ${visibleSearchReasons.map((reason, reasonIndex) => searchReasonMarkup(
           reason,
           reasonIndex === visibleSearchReasons.length - 1 ? hiddenSearchReasonCount : 0
         )).join("")}
       </div>
-      <span class="place-books">${escapeHtml(place.books.slice(0, 3).join(" / ") || pluralize(place.verseCount, "verse"))}</span>
+      <span class="place-books"><strong>${formatNumber(place.verseCount)}</strong><small>${place.verseCount === 1 ? "reference" : "references"}</small></span>
     </button>
   `;
 }
@@ -3022,7 +3325,7 @@ function renderPlaceRow(place, index, className = "") {
 function renderPlaceListItem(place, index, total, className = "") {
   return `
     <div class="place-list-item" role="listitem" aria-posinset="${index + 1}" aria-setsize="${total}">
-      ${renderPlaceRow(place, index, className)}
+      ${renderPlaceRow(place, className)}
     </div>
   `;
 }
@@ -3034,34 +3337,34 @@ function placesForActiveCoordinateStack(visiblePlaces = visiblePlacesCache) {
 
 function syncPlacesPanelContext(stackPlaces) {
   const inStackMode = Array.isArray(stackPlaces);
-  const query = activeSearchLabel();
-  const inSearchMode = !inStackMode && Boolean(query);
+  const inSearchMode = !inStackMode && Boolean(activeSearchLabel());
+  const route = getActiveRoute();
+  const filters = getActiveFilterTokens({ includeSearch: false });
+  const filterText = filters.length ? `Filters: ${filters.join(" · ")}` : "";
   placesPanel.classList.toggle("is-search-mode", inSearchMode);
-  placesKicker.textContent = inStackMode ? "Same map point" : inSearchMode ? "Search" : "Current places";
-  placesTitle.textContent = inStackMode ? "Choose a place" : inSearchMode ? "Search results" : "Place list";
+  placesKicker.textContent = inStackMode ? "Same map point" : inSearchMode ? route ? "Search this journey" : "Search" : route ? "Journey guide" : "Current places";
+  placesTitle.textContent = inStackMode ? "Choose a place" : inSearchMode ? "Search results" : route ? "Journey stops" : "Place list";
   placesSearchForm.hidden = inStackMode;
-  placesContextNote.hidden = !(inStackMode || inSearchMode);
-
-  if (inStackMode) {
-    placesContextNote.textContent = `These ${formatNumber(stackPlaces.length)} visible places share this mapped coordinate.`;
-    placesPanel.setAttribute("aria-describedby", "placesContextNote");
-  } else if (inSearchMode) {
-    const count = visiblePlacesCache.length;
-    const hasFilters = hasActivePlaceFilters();
-    placesContextNote.textContent = `${pluralize(count, "place")} ${count === 1 ? "matches" : "match"} “${query}”${hasFilters ? " with the current filters" : ""}.`;
-    placesContextNote.hidden = count === 0;
-    if (count) {
-      placesPanel.setAttribute("aria-describedby", "placesContextNote");
-    } else {
-      placesPanel.removeAttribute("aria-describedby");
-    }
-  } else {
-    placesContextNote.textContent = "";
-    placesPanel.removeAttribute("aria-describedby");
-  }
+  placesContextNote.textContent = inStackMode
+    ? `These ${formatNumber(stackPlaces.length)} visible places share this mapped coordinate.${filterText ? ` ${filterText}.` : ""}`
+    : [route?.title, filterText].filter(Boolean).join(" · ");
+  placesContextNote.hidden = !placesContextNote.textContent;
+  placesClearFilters.hidden = inStackMode || !filters.length;
+  placesContextRow.hidden = placesContextNote.hidden && placesClearFilters.hidden;
+  if (placesContextNote.hidden) placesPanel.removeAttribute("aria-describedby");
+  else placesPanel.setAttribute("aria-describedby", "placesContextNote");
 }
 
 function renderPlacesPanel(visiblePlaces = visiblePlacesCache) {
+  const search = Boolean(activeSearchLabel());
+  const choices = [
+    ...(search ? [{ value: "auto", label: "Best match" }] : []),
+    { value: "references", label: "Most references" }, { value: "name", label: "Name, A–Z" }
+  ];
+  const optionMarkup = choices.map(({ value, label }) => `<option value="${value}">${label}</option>`).join("");
+  if (placeOrderSelect.innerHTML !== optionMarkup) placeOrderSelect.innerHTML = optionMarkup;
+  placeOrderSelect.value = !search && state.placeOrder === "auto" ? "references" : state.placeOrder;
+  placesListTools.hidden = Boolean(getActiveRoute() || activeCoordinateStackKey || visiblePlaces.length < 2);
   const stackPlaces = placesForActiveCoordinateStack(visiblePlaces);
   syncPlacesPanelContext(stackPlaces);
   renderPlaceList(stackPlaces || visiblePlaces);
@@ -3079,9 +3382,6 @@ function openCoordinateStack(key) {
   mapStage.focus({ preventScroll: true });
   if (isMobileLayout()) setPlaceSheetState("peek", { animate: false });
   setDrawer("places", true);
-  requestAnimationFrame(() => {
-    placeList.querySelector("[data-place]")?.focus({ preventScroll: true });
-  });
 }
 
 function extendPlaceList({ restoreFocusToLoadMore = false } = {}) {
@@ -3089,12 +3389,15 @@ function extendPlaceList({ restoreFocusToLoadMore = false } = {}) {
   const visiblePlaces = placesForActiveCoordinateStack(allVisiblePlaces) || allVisiblePlaces;
   if (state.placeListLimit >= visiblePlaces.length) return;
   const scrollTopBeforeLoad = placeList.scrollTop;
+  const firstNewIndex = state.placeListLimit;
   state.placeListLimit = Math.min(visiblePlaces.length, state.placeListLimit + PLACE_LIST_PAGE_SIZE);
   renderPlacesPanel(allVisiblePlaces);
   placeList.scrollTop = scrollTopBeforeLoad;
   if (restoreFocusToLoadMore) {
     requestAnimationFrame(() => {
-      document.getElementById("placeListMore")?.focus({ preventScroll: true });
+      const firstNewRow = [...placeList.querySelectorAll("[data-place]")].find((row) => row.dataset.place === visiblePlaces[firstNewIndex]?.id);
+      firstNewRow?.focus({ preventScroll: true });
+      firstNewRow?.scrollIntoView({ block: "nearest", behavior: "auto" });
     });
   }
 }
@@ -3141,21 +3444,45 @@ function revealSelectedPlaceInList({ force = false } = {}) {
 }
 
 function renderPlaceList(visiblePlaces) {
+  const route = getActiveRoute();
+  const noun = route ? "stop" : "place";
+  const focusedPlaceId = placeList.contains(document.activeElement)
+    ? document.activeElement.closest("[data-place]")?.dataset.place
+    : null;
   if (!visiblePlaces.length) {
     observePlaceListMore(null);
     placeListRenderKey = "";
     state.placeListLimit = PLACE_LIST_PAGE_SIZE;
-    listCounter.textContent = "0 places";
+    listCounter.textContent = `0 ${noun}s`;
     const query = activeSearchLabel();
     const filterSuggestion = hasActivePlaceFilters() ? " You can also reset the current filters." : "";
+    const suggestions = query ? suggestPlaceNames(placesInJourney(allPlaces.filter(matchesPlaceFilters), route), query) : [];
+    const journeyEscape = route ? `<button class="text-action empty-journey-exit" id="emptyJourneyExit" type="button">${query ? "Search the whole atlas" : "Browse the whole atlas"} ${iconMarkup("arrow-right")}</button>` : "";
     placeList.innerHTML = query
       ? `
         <div class="empty-state place-list-empty">
-          <strong>No matches for “${escapeHtml(query)}”</strong>
-          <span>Try a place name, modern location, Bible book or reference, place type, or journey.${filterSuggestion}</span>
+          <h3>No matches for “${escapeHtml(query)}”</h3>
+          <p>Try a shorter name, a modern location, or a reference such as John 4:5.${filterSuggestion}</p>
+          ${suggestions.length ? `<div class="search-suggestions"><h4>Similar place names</h4>${suggestions.map((name) => `<button class="suggestion-button" type="button" data-search-suggestion="${escapeHtml(name)}" aria-label="${escapeHtml(name)}: search this place name">${iconMarkup("search")}<span>${escapeHtml(name)}</span>${iconMarkup("arrow-right")}</button>`).join("")}</div>` : ""}
+          <button class="ghost-button" id="emptyListReset" type="button">Reset search & filters</button>
+          ${journeyEscape}
         </div>
       `
-      : `<div class="empty-state">No places match the current filters.</div>`;
+      : `<div class="empty-state place-list-empty"><h3>No matching ${noun}s</h3><p>Try a different combination of filters.</p><button class="ghost-button" id="emptyListReset" type="button">Reset search & filters</button>${journeyEscape}</div>`;
+    document.getElementById("emptyJourneyExit")?.addEventListener("click", () => {
+      handleRouteSelection(null);
+      requestAnimationFrame(() => (placeList.querySelector("[data-place]") || placesClose).focus({ preventScroll: true }));
+    });
+    document.getElementById("emptyListReset").addEventListener("click", () => {
+      resetSearchAndFilters({ fitMap: true });
+      (placeList.querySelector("[data-place]") || placesClose).focus({ preventScroll: true });
+    });
+    placeList.querySelectorAll("[data-search-suggestion]").forEach((button) => {
+      button.addEventListener("click", () => {
+        placesSearchInput.value = button.dataset.searchSuggestion;
+        submitSearch(placesSearchInput);
+      });
+    });
     return;
   }
 
@@ -3181,9 +3508,7 @@ function renderPlaceList(visiblePlaces) {
       </div>
     `
     : "";
-  listCounter.textContent = hidden
-    ? `${formatNumber(renderedCount)} of ${formatNumber(visiblePlaces.length)}`
-    : `${formatNumber(visiblePlaces.length)} place${visiblePlaces.length === 1 ? "" : "s"}`;
+  listCounter.textContent = pluralize(visiblePlaces.length, noun);
   const loadMore = hidden > 0
     ? `
       <button class="place-list-more" type="button" id="placeListMore">
@@ -3191,11 +3516,11 @@ function renderPlaceList(visiblePlaces) {
         <strong>Show next ${formatNumber(Math.min(PLACE_LIST_PAGE_SIZE, hidden))}</strong>
       </button>
     `
-    : `<p class="place-list-end">Showing all ${pluralize(visiblePlaces.length, "place")}.</p>`;
+    : `<p class="place-list-end">${activeCoordinateStackKey ? `${pluralize(visiblePlaces.length, noun)} at this map point.` : route ? `${pluralize(visiblePlaces.length, "stop")} in this journey.` : `Showing all ${pluralize(visiblePlaces.length, "place")}.`}</p>`;
 
   const listLabel = activeCoordinateStackKey
     ? "Places at this map point"
-    : activeSearchLabel() ? "Search results" : "Current places";
+    : activeSearchLabel() ? "Search results" : route ? "Journey stops" : "Current places";
   placeList.innerHTML = `
     ${selectedPin}
     <div class="place-list-results" role="list" aria-label="${listLabel}">
@@ -3209,6 +3534,9 @@ function renderPlaceList(visiblePlaces) {
       selectPlaceFromList(button.dataset.place);
     });
   });
+  if (focusedPlaceId) {
+    [...placeList.querySelectorAll("[data-place]")].find((button) => button.dataset.place === focusedPlaceId)?.focus({ preventScroll: true });
+  }
 
   const moreButton = document.getElementById("placeListMore");
   if (moreButton) moreButton.addEventListener("click", () => extendPlaceList({ restoreFocusToLoadMore: true }));
@@ -3223,18 +3551,19 @@ function handlePlaceListScroll() {
 
 function summaryAnnouncementFor(visiblePlaces) {
   const route = getActiveRoute();
+  const noun = route ? "stop" : "place";
   const query = activeSearchLabel();
   if (query) {
     if (!visiblePlaces.length) {
       const filterContext = hasActivePlaceFilters() ? " with the current filters" : "";
       const filterSuggestion = hasActivePlaceFilters() ? " You can also reset the current filters." : "";
-      return `No places match “${query}”${filterContext}. Try another name, location, Bible reference, type, or journey.${filterSuggestion}`;
+      return `No ${noun}s match “${query}”${filterContext}. Try another name, location, Bible reference, type, or journey.${filterSuggestion}`;
     }
-    return `${pluralize(visiblePlaces.length, "place")} ${visiblePlaces.length === 1 ? "matches" : "match"} “${query}”. Open the place list to see why.`;
+    return `${pluralize(visiblePlaces.length, noun)} ${visiblePlaces.length === 1 ? "matches" : "match"} “${query}”. Open the ${route ? "stop" : "place"} list to see why.`;
   }
 
   if (hasActivePlaceFilters()) {
-    return `${pluralize(visiblePlaces.length, "place")} ${visiblePlaces.length === 1 ? "matches" : "match"} the current filters.`;
+    return `${pluralize(visiblePlaces.length, noun)} ${visiblePlaces.length === 1 ? "matches" : "match"} the current filters.`;
   }
   return route ? route.description : "All mapped OpenBible places are visible.";
 }
@@ -3242,6 +3571,7 @@ function summaryAnnouncementFor(visiblePlaces) {
 function updateSummaryAnnouncement(visiblePlaces, { immediate = false } = {}) {
   const message = summaryAnnouncementFor(visiblePlaces);
   window.clearTimeout(summaryAnnouncementTimer);
+  if (summaryText.textContent === message) return;
 
   const announce = () => {
     summaryText.textContent = message;
@@ -3254,16 +3584,59 @@ function updateSummaryAnnouncement(visiblePlaces, { immediate = false } = {}) {
   }
 }
 
-function renderSummary(visiblePlaces) {
+function renderSummary(visiblePlaces, { immediate = true } = {}) {
   const query = activeSearchLabel();
+  const route = getActiveRoute();
+  document.body.classList.toggle("has-journey", Boolean(route));
+  leaveJourney.hidden = !route;
+  renderMapLegend(route);
+  const routeWithoutStops = route && !visibleRoutePlaces(route, visiblePlaces).length;
+  const contextNote = document.getElementById("mapContextNote");
+  contextNote.hidden = visiblePlaces.length > 0 && !routeWithoutStops;
+  const canSearchAtlas = Boolean(route && query && !visiblePlaces.length);
+  document.getElementById("mapSearchWholeAtlas").hidden = !canSearchAtlas;
+  document.getElementById("resetMapFilters").hidden = canSearchAtlas;
+  document.getElementById("mapContextText").textContent = routeWithoutStops
+    ? `No stops in “${route.title}” match the current search or filters.`
+    : "No places match the current search or filters.";
+  document.getElementById("mapTitle").textContent = route?.title || (query ? "Places matching your search" : "Explore the biblical world");
+  zoomHome.disabled = !mapLoaded || !visiblePlaces.length;
+  const fitLabel = route && !routeWithoutStops ? "Fit journey stops" : query || hasActivePlaceFilters() ? "Fit matching places" : "Fit all places";
+  zoomHome.setAttribute("aria-label", fitLabel);
+  zoomHome.title = fitLabel;
   visibleCount.textContent = visiblePlaces.length.toLocaleString("en-US");
+  document.getElementById("placesToggleLabel").textContent = route ? "Stops" : "Places";
   placesToggle.setAttribute(
     "aria-label",
-    `${query ? "Open search results" : "Open current place list"}, ${pluralize(visiblePlaces.length, "place")}`
+    `${route ? "Stops" : "Places"} ${formatNumber(visiblePlaces.length)}: ${query ? "open search results" : route ? "open journey stops" : "open place list"}`
   );
-  listCounter.textContent = `${visiblePlaces.length.toLocaleString("en-US")} place${visiblePlaces.length === 1 ? "" : "s"}`;
+  listCounter.textContent = pluralize(visiblePlaces.length, route ? "stop" : "place");
 
-  updateSummaryAnnouncement(visiblePlaces);
+  updateSummaryAnnouncement(visiblePlaces, { immediate });
+}
+
+function syncDocumentTitle() {
+  const selected = selectedPlaceUrlActive ? placeById(state.selectedId) : null;
+  const route = getActiveRoute();
+  const query = activeSearchLabel();
+  const shortQuery = Array.from(query).length > 60 ? `${Array.from(query).slice(0, 57).join("")}…` : query;
+  const context = route?.title || (query ? `Search: ${shortQuery}` : "");
+  const title = [selected ? displayPlaceName(selected) : "", context].filter(Boolean).join(" · ");
+  document.title = title ? `${title} | Bible Map` : "Bible Map | Atlas of the biblical world";
+}
+
+function renderMapLegend(route) {
+  const nextKey = route?.id || "atlas";
+  if (mapLegendBody.dataset.context === nextKey) return;
+  mapLegendBody.dataset.context = nextKey;
+  document.querySelector(".legend-summary-dots").hidden = Boolean(route);
+  mapLegendBody.innerHTML = route ? `
+    <div class="journey-key-row"><span class="legend-step-marker" aria-hidden="true">1</span><p>Numbers follow the journey's stop list. Select a stop to explore it.</p></div>
+    <div class="journey-key-row"><span class="legend-stop-group" aria-hidden="true">3<small>stops</small></span><p>Nearby stops share a group. Select it to zoom in; stops at the same point open a list.</p></div>
+    <div class="journey-key-row"><span class="legend-route-line" aria-hidden="true"></span><p>Dashed lines connect selected places schematically. They do not trace an exact historical path.</p></div>
+    <p class="legend-caveat">Clay highlights your selected stop. See Location for its identification and confidence.</p>
+    ${mapKeyboardHint}
+  ` : atlasLegendMarkup;
 }
 
 function renderMobilePlaceSummary(place) {
@@ -3272,52 +3645,20 @@ function renderMobilePlaceSummary(place) {
     mobilePlaceSummaryTitle.textContent = "No selected place";
     mobilePlaceSummaryMeta.textContent = "Adjust filters or select a visible map point.";
     mobilePlaceSummaryAction.textContent = "Unavailable";
-    mobilePlaceSummary.setAttribute("aria-label", "No selected place details");
+    mobilePlaceSummary.removeAttribute("aria-label");
     return;
   }
 
   const summary = referenceSummaryForPlace(place);
-  const modernName = place.bestIdentification?.modern?.name || place.bestIdentification?.name || "modern identification";
+  const route = getActiveRoute();
+  const routePosition = route?.locations.indexOf(place.id) ?? -1;
   mobilePlaceSummary.disabled = false;
   mobilePlaceSummaryTitle.textContent = displayPlaceName(place);
-  mobilePlaceSummaryMeta.textContent = `${confidenceMeta[place.confidence]?.label || "Unknown"} confidence · ${pluralize(summary.bookCount, "book")} · ${modernName}`;
-}
-
-function renderMiniCard(place) {
-  renderMobilePlaceSummary(place);
-
-  if (!place) {
-    miniCard.disabled = true;
-    miniCard.classList.add("is-empty");
-    miniCard.setAttribute("aria-label", "No selected place");
-    miniCard.innerHTML = `
-      <strong>Explore the map</strong>
-      <span>Tap a place or open the place list.</span>
-    `;
-    return;
-  }
-
-  const route = getActiveRoute();
-  const routeNote = route && route.locations.includes(place.id)
-    ? `<span class="mini-card-route">${escapeHtml(route.title)}</span>`
-    : "";
-  const modernName = place.bestIdentification?.modern?.name || place.bestIdentification?.name || "modern identification";
-  const summary = referenceSummaryForPlace(place);
-
-  miniCard.disabled = false;
-  miniCard.classList.remove("is-empty");
-  miniCard.setAttribute("aria-label", `View details for ${accessiblePlaceName(place)}`);
-  miniCard.innerHTML = `
-    <span class="mini-card-copy">
-      <strong>${escapeHtml(displayPlaceName(place))}</strong>
-      ${placeVariantLabel(place) ? `<span class="place-variant">${escapeHtml(placeVariantLabel(place))}</span>` : ""}
-      <span class="mini-card-meta">
-        ${escapeHtml(confidenceMeta[place.confidence]?.label || "Unknown")} confidence · ${pluralize(summary.bookCount, "book")} · ${pluralize(summary.total, "verse")}
-      </span>
-      <span>${escapeHtml(modernName)}</span>
-      ${routeNote}
-    </span>
-  `;
+  mobilePlaceSummaryMeta.textContent = routePosition >= 0
+    ? `Stop ${routePosition + 1} of ${route.locations.length} · ${route.title}`
+    : summary.total
+    ? `${pluralize(summary.total, "verse reference")} · ${pluralize(summary.bookCount, "book")}`
+    : "Related historical place · No verse references";
 }
 
 function renderAbout() {
@@ -3331,19 +3672,35 @@ function renderAbout() {
 
   aboutContent.innerHTML = `
     <section class="about-section">
-      <h3>Data snapshot</h3>
+      <h3>Place the story</h3>
+      <p>Bible Map is a field atlas for reading Scripture. Explore ${formatNumber(counts.resolved)} ancient places, follow a journey, and find the passages that mention a place.</p>
+      <ol class="about-guide">
+        <li><strong>Find a place</strong><span>Search an ancient or modern name, or a Bible reference such as John 4:5.</span></li>
+        <li><strong>Follow a journey</strong><span>Choose a guide and move through its stops. Connecting lines illustrate the story, rather than a reconstructed travel route.</span></li>
+        <li><strong>Read the passages</strong><span>Open a place's References tab. Verse links open the English Standard Version on Bible Gateway.</span></li>
+      </ol>
+    </section>
+    <section class="about-section">
+      <h3>Reading the map</h3>
+      <p>In the atlas, numbered groups gather nearby places. Small marker colors show location confidence. Select a group to look closer; places at the same coordinate open a chooser.</p>
+      <p>Journeys show their own numbered stops. Groups labeled “stops” keep nearby stops together until you zoom in. Clay highlights your selection. The Location tab explains each identification and its confidence.</p>
+    </section>
+    <section class="about-section">
+      <h3>Place data</h3>
       <p>
-        This app uses a pinned snapshot of ${externalLinkMarkup("OpenBible.info Bible Geocoding Data", sourceMeta.sourceUrl)}.
-        It is not fetched live in the browser or in CI.
+        The atlas uses ${externalLinkMarkup("OpenBible.info Bible Geocoding Data", sourceMeta.sourceUrl)}, from a snapshot dated ${escapeHtml(snapshot)}.
+        ${formatNumber(counts.resolved)} places have coordinates; ${formatNumber(counts.unresolved)} additional records could not be mapped.
       </p>
-      <div class="detail-meta-grid">
-        <div class="detail-stat"><span>Upstream snapshot</span><strong>${escapeHtml(snapshot)}</strong></div>
-        <div class="detail-stat"><span>Browser data generated</span><strong>${escapeHtml(generated)}</strong></div>
-        <div class="detail-stat"><span>OpenBible commit</span><strong>${escapeHtml(sourceMeta.commit.slice(0, 12))}</strong></div>
-        <div class="detail-stat"><span>Resolved places</span><strong>${counts.resolved.toLocaleString("en-US")}</strong></div>
-        <div class="detail-stat"><span>Unresolved records</span><strong>${counts.unresolved.toLocaleString("en-US")}</strong></div>
-      </div>
-      <p>${counts.unresolved.toLocaleString("en-US")} records are not mapped because their leading OpenBible identification has no coordinate.</p>
+      <p>Biblical context notes and journey guides are editorial introductions. Their linked passages offer a starting point for reading the biblical accounts.</p>
+      <details class="source-disclosure">
+        <summary><span>Snapshot details</span>${iconMarkup("chevron", "disclosure-icon")}</summary>
+        <div class="detail-meta-grid">
+          <div class="detail-stat"><span>Source snapshot</span><strong>${escapeHtml(snapshot)}</strong></div>
+          <div class="detail-stat"><span>Atlas import</span><strong>${escapeHtml(generated)}</strong></div>
+          <div class="detail-stat"><span>OpenBible commit</span><strong>${escapeHtml(sourceMeta.commit.slice(0, 12))}</strong></div>
+        </div>
+        <p>The place data is stored with the atlas. It stays consistent between visits until a new snapshot is imported.</p>
+      </details>
     </section>
     <section class="about-section">
       <h3>Map layers</h3>
@@ -3377,14 +3734,14 @@ function renderAbout() {
         Geodata is adapted from OpenBible.info Bible Geocoding Data under
         ${externalLinkMarkup(sourceMeta.license, sourceMeta.licenseUrl)}.
         Imported records are reshaped for this application; embedded markup, images, and raw polygon/path geometry are excluded.
-        Some retained point coordinates derive from OpenStreetMap, with their per-place provenance shown in the Evidence tab.
+        Some retained point coordinates derive from OpenStreetMap, with their per-place provenance shown in the Location tab.
       </p>
     </section>
     <section class="about-section">
       <h3>Uncertainty</h3>
       <p>
         Biblical geography often involves disputed identifications. Confidence bands expose OpenBible's scoring instead of hiding uncertainty.
-        Each Evidence tab explains whether its marker is a mapped point, settlement-level location, approximate area center, or representative point for a larger feature.
+        Each Location tab explains whether its marker is a mapped point, settlement-level location, approximate area center, or representative point for a larger feature.
         No marker should be read as a guaranteed exact biblical location.
       </p>
     </section>
@@ -3406,7 +3763,7 @@ function textFieldMentionsName(value) {
 }
 
 function localizeBaseMapToEnglish() {
-  if (!mapLoaded || !map) return;
+  if (!map) return;
   const style = map.getStyle();
   if (!style || !Array.isArray(style.layers)) return;
 
@@ -3420,7 +3777,7 @@ function localizeBaseMapToEnglish() {
   ];
 
   style.layers.forEach((layer) => {
-    if (layer.type !== "symbol") return;
+    if (layer.type !== "symbol" || layer.id.startsWith("openbible-") || layer.id.startsWith("story-")) return;
     const textField = layer.layout && layer.layout["text-field"];
     if (!textFieldMentionsName(textField)) return;
     try {
@@ -3469,14 +3826,26 @@ function syncMapViewControl() {
   });
 }
 
-function announceMapView(message, { visible = false } = {}) {
+function announceMapView(message, { visible = false, compactMessage = message } = {}) {
+  if (!visible && document.activeElement === mapViewDismiss) focusMapViewControl();
   mapViewSwitcher.classList.toggle("has-source-error", visible);
   mapViewStatus.classList.toggle("is-visible", visible);
   mapViewStatus.classList.toggle("sr-only", !visible);
-  mapViewStatus.textContent = "";
+  mapViewDismiss.hidden = !visible;
+  mapViewFullMessage.textContent = "";
+  mapViewCompactMessage.textContent = "";
   window.requestAnimationFrame(() => {
-    mapViewStatus.textContent = message;
+    mapViewFullMessage.textContent = message;
+    mapViewCompactMessage.textContent = compactMessage;
+    if (visible && mapStage.contains(document.activeElement) && getComputedStyle(document.activeElement).visibility === "hidden") {
+      mapViewDismiss.focus({ preventScroll: true });
+    }
   });
+}
+
+function focusMapViewControl() {
+  const target = mapLegend.open ? mapLegend.querySelector("summary") : mapViewInputs.find((input) => input.checked);
+  target?.focus({ preventScroll: true });
 }
 
 function beginMapViewLoadAnnouncement() {
@@ -3498,16 +3867,12 @@ function beginMapViewLoadAnnouncement() {
   announceMapView(`Loading ${view.label.toLowerCase()} view.`);
 }
 
-function syncOpenBibleLabelPalette() {
+function syncMapLabelPalette() {
   if (!mapLoaded || !map || !map.getLayer(LABEL_LAYER_ID)) return;
   const satellite = state.mapView === "satellite";
-  map.setPaintProperty(LABEL_LAYER_ID, "text-color", satellite ? "#fff1d6" : "#1f2a26");
-  map.setPaintProperty(
-    LABEL_LAYER_ID,
-    "text-halo-color",
-    satellite ? "rgba(8, 15, 13, 0.9)" : "rgba(255, 252, 246, 0.92)"
-  );
-  map.setPaintProperty(LABEL_LAYER_ID, "text-halo-width", satellite ? 2.1 : 1.6);
+  const selectedPlace = placeById(state.selectedId);
+  applyAtlasLabelTheme(map, satellite, Boolean(getActiveRoute()), selectedPlace ? displayPlaceName(selectedPlace) : "");
+  applyBiblicalLabelTheme(map, satellite);
 }
 
 function applyMapView() {
@@ -3524,7 +3889,7 @@ function applyMapView() {
     const visibility = overlay.layer.id === activeOverlayLayerId ? "visible" : "none";
     map.setLayoutProperty(overlay.layer.id, "visibility", visibility);
   });
-  syncOpenBibleLabelPalette();
+  syncMapLabelPalette();
 }
 
 function selectMapView(value) {
@@ -3540,217 +3905,58 @@ function selectMapView(value) {
   requestUrlSync("replace");
 }
 
+function nearestMapFeature(features = [], point) {
+  if (!map || !point) return null;
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const feature of features || []) {
+    if (feature.geometry?.type !== "Point") continue;
+    const projected = map.project(feature.geometry.coordinates);
+    const distance = Math.hypot(projected.x - point.x, projected.y - point.y);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = feature;
+    }
+  }
+  return nearest;
+}
+
 function ensurePlaceLayers() {
   if (!mapLoaded || !map || map.getSource(SOURCE_ID)) return;
+  map.addSource(SOURCE_ID, atlasSource());
+  map.addSource(COORDINATE_STACK_SOURCE_ID, { type: "geojson", data: featureCollection() });
+  atlasLayers({
+    placeCount: allPlaces.length, mobile: isMobileLayout(),
+    confidenceColors: Object.fromEntries(confidenceOrder.map((key) => [key, confidenceMeta[key].color]))
+  }).forEach((layer) => map.addLayer(layer));
 
-  map.addSource(SOURCE_ID, {
-    type: "geojson",
-    data: featureCollection()
-  });
-  map.addSource(COORDINATE_STACK_SOURCE_ID, {
-    type: "geojson",
-    data: featureCollection()
-  });
-
-  map.addLayer({
-    id: SELECTED_LAYER_ID,
-    type: "circle",
-    source: SOURCE_ID,
-    filter: ["all", ["==", ["get", "stackCount"], 1], ["==", ["get", "selected"], true]],
-    paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 8, 6, 16, 10, 28],
-      "circle-color": "#fff7e6",
-      "circle-opacity": 0.34,
-      "circle-stroke-color": "#23302c",
-      "circle-stroke-width": 1.4
+  map.on("click", CLUSTER_HIT_LAYER_ID, async (event) => {
+    const feature = nearestMapFeature(event.features, event.point);
+    if (feature?.properties?.sharedKey) {
+      openCoordinateStack(feature.properties.sharedKey);
+      return;
     }
-  });
-
-  map.addLayer({
-    id: ROUTE_MEMBER_LAYER_ID,
-    type: "circle",
-    source: SOURCE_ID,
-    filter: ["all", ["==", ["get", "stackCount"], 1], ["==", ["get", "inRoute"], true], ["!=", ["get", "selected"], true]],
-    paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 5.5, 6, 11, 10, 19],
-      "circle-color": ["get", "routeColor"],
-      "circle-opacity": 0.18,
-      "circle-stroke-color": ["get", "routeColor"],
-      "circle-stroke-opacity": 0.88,
-      "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 2, 1.1, 8, 2.2]
-    }
-  });
-
-  map.addLayer({
-    id: CIRCLE_LAYER_ID,
-    type: "circle",
-    source: SOURCE_ID,
-    filter: ["==", ["get", "stackCount"], 1],
-    paint: {
-      "circle-radius": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        2, ["case", ["==", ["get", "selected"], true], 5, 2.6],
-        6, ["case", ["==", ["get", "selected"], true], 8, 4.2],
-        10, ["case", ["==", ["get", "selected"], true], 13, 7]
-      ],
-      "circle-color": confidenceColorExpression(),
-      "circle-opacity": [
-        "case",
-        ["==", ["get", "selected"], true], 0.98,
-        ["==", ["get", "inRoute"], true], 0.92,
-        ["==", ["get", "muted"], true], 0.16,
-        0.84
-      ],
-      "circle-stroke-color": [
-        "case",
-        ["==", ["get", "selected"], true], "#fff7e6",
-        ["==", ["get", "inRoute"], true], ["get", "routeColor"],
-        "rgba(255,255,255,0.86)"
-      ],
-      "circle-stroke-width": [
-        "case",
-        ["==", ["get", "selected"], true], 2.8,
-        ["==", ["get", "inRoute"], true], 1.8,
-        1.1
-      ]
-    }
-  });
-
-  map.addLayer({
-    id: HIT_LAYER_ID,
-    type: "circle",
-    source: SOURCE_ID,
-    filter: ["==", ["get", "stackCount"], 1],
-    paint: {
-      "circle-radius": hitRadiusExpression(),
-      "circle-color": "#000000",
-      "circle-opacity": 0.001,
-      "circle-stroke-width": 0
-    }
-  });
-
-  map.addLayer({
-    id: LABEL_LAYER_ID,
-    type: "symbol",
-    source: SOURCE_ID,
-    minzoom: 3.2,
-    filter: [
-      "all",
-      [">=", ["get", "labelPriority"], 85],
-      ["any", ["==", ["get", "stackCount"], 1], ["==", ["get", "selected"], true]]
-    ],
-    layout: {
-      "text-field": ["get", "name"],
-      "text-size": ["interpolate", ["linear"], ["zoom"], 3, 10, 7, 12.5, 11, 15],
-      "text-offset": [0, 1.1],
-      "text-anchor": "top",
-      "text-optional": true,
-      // MapLibre places lower sort keys first when labels cannot overlap.
-      "symbol-sort-key": ["-", 0, ["get", "labelPriority"]],
-      "text-allow-overlap": false,
-      "text-ignore-placement": false,
-      "text-font": ["Noto Sans Regular"]
-    },
-    paint: {
-      "text-color": "#1f2a26",
-      "text-halo-color": "rgba(255, 252, 246, 0.92)",
-      "text-halo-width": 1.6,
-      "text-opacity": [
-        "case",
-        ["==", ["get", "selected"], true], 1,
-        ["==", ["get", "inRoute"], true], 0.96,
-        ["==", ["get", "muted"], true], 0.26,
-        0.95
-      ]
-    }
-  });
-
-  map.addLayer({
-    id: COORDINATE_STACK_HALO_LAYER_ID,
-    type: "circle",
-    source: COORDINATE_STACK_SOURCE_ID,
-    filter: ["==", ["get", "selected"], true],
-    paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 13, 8, 19],
-      "circle-color": "#fff7e6",
-      "circle-opacity": 0.42,
-      "circle-stroke-color": "#23302c",
-      "circle-stroke-width": 1.2
-    }
-  });
-
-  map.addLayer({
-    id: COORDINATE_STACK_CIRCLE_LAYER_ID,
-    type: "circle",
-    source: COORDINATE_STACK_SOURCE_ID,
-    paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 2, 9.5, 8, 14],
-      "circle-color": "#25312d",
-      "circle-opacity": ["case", ["==", ["get", "muted"], true], 0.38, 0.94],
-      "circle-stroke-color": [
-        "case",
-        ["==", ["get", "inRoute"], true], ["get", "routeColor"],
-        "rgba(255,247,230,0.94)"
-      ],
-      "circle-stroke-width": ["case", ["==", ["get", "inRoute"], true], 2.4, 1.5]
-    }
-  });
-
-  map.addLayer({
-    id: COORDINATE_STACK_COUNT_LAYER_ID,
-    type: "symbol",
-    source: COORDINATE_STACK_SOURCE_ID,
-    layout: {
-      "text-field": ["to-string", ["get", "count"]],
-      "text-size": ["interpolate", ["linear"], ["zoom"], 2, 9, 8, 11],
-      "text-font": ["Noto Sans Regular"],
-      "text-allow-overlap": true,
-      "text-ignore-placement": true
-    },
-    paint: {
-      "text-color": "#fff7e6",
-      "text-opacity": ["case", ["==", ["get", "muted"], true], 0.66, 1]
-    }
-  });
-
-  map.addLayer({
-    id: COORDINATE_STACK_HIT_LAYER_ID,
-    type: "circle",
-    source: COORDINATE_STACK_SOURCE_ID,
-    paint: {
-      "circle-radius": isMobileLayout()
-        ? ["interpolate", ["linear"], ["zoom"], 2, 20, 8, 27]
-        : ["interpolate", ["linear"], ["zoom"], 2, 15, 8, 21],
-      "circle-color": "#000000",
-      "circle-opacity": 0.001,
-      "circle-stroke-width": 0
+    const clusterId = feature?.properties?.cluster_id;
+    if (!Number.isInteger(clusterId)) return;
+    const revision = mapDataRevision;
+    try {
+      const zoom = await map.getSource(SOURCE_ID).getClusterExpansionZoom(clusterId);
+      if (revision !== mapDataRevision) return;
+      mapFrameIntent = null;
+      map.easeTo({ center: feature.geometry.coordinates, zoom: Math.min(zoom, CLUSTER_MAX_ZOOM + 1), padding: mapViewPadding(), duration: motionDuration(500) });
+    } catch {
+      // A filter or selection update can replace the cluster while its zoom is resolved.
     }
   });
 
   map.on("click", COORDINATE_STACK_HIT_LAYER_ID, (event) => {
-    const nearest = (event.features || []).reduce((best, candidate) => {
-      const coordinates = candidate.geometry?.coordinates;
-      if (!Array.isArray(coordinates) || coordinates.length < 2) return best;
-      const projected = map.project(coordinates);
-      const distance = Math.hypot(projected.x - event.point.x, projected.y - event.point.y);
-      return !best || distance < best.distance ? { feature: candidate, distance } : best;
-    }, null);
-    const key = nearest?.feature?.properties?.key;
+    const key = nearestMapFeature(event.features, event.point)?.properties?.key;
     if (key) openCoordinateStack(key);
   });
 
   map.on("click", HIT_LAYER_ID, (event) => {
     if (map.queryRenderedFeatures(event.point, { layers: [COORDINATE_STACK_HIT_LAYER_ID] }).length) return;
-    const nearest = (event.features || []).reduce((best, candidate) => {
-      const coordinates = candidate.geometry?.coordinates;
-      if (!Array.isArray(coordinates) || coordinates.length < 2) return best;
-      const projected = map.project(coordinates);
-      const distance = Math.hypot(projected.x - event.point.x, projected.y - event.point.y);
-      return !best || distance < best.distance ? { feature: candidate, distance } : best;
-    }, null);
-    const feature = nearest?.feature;
+    const feature = nearestMapFeature(event.features, event.point);
     if (!feature?.properties?.id) return;
     selectPlace(feature.properties.id, { revealSheet: true });
   });
@@ -3764,12 +3970,13 @@ function ensurePlaceLayers() {
     const interactiveAtPoint = Number.isFinite(clientX) && Number.isFinite(clientY)
       && document.elementsFromPoint(clientX, clientY).some((element) => element.closest(interactiveSelector));
     if (interactiveTarget || interactiveAtPoint) return;
-    const hitFeatures = map.queryRenderedFeatures(event.point, { layers: [HIT_LAYER_ID, COORDINATE_STACK_HIT_LAYER_ID] });
+    const hitFeatures = map.queryRenderedFeatures(event.point, { layers: [HIT_LAYER_ID, COORDINATE_STACK_HIT_LAYER_ID, CLUSTER_HIT_LAYER_ID, ROUTE_STOP_HIT_LAYER_ID] });
     if (hitFeatures.length) return;
+    if (openDrawer === "places") closeDrawers();
     clearPlaceSelection();
   });
 
-  [HIT_LAYER_ID, COORDINATE_STACK_HIT_LAYER_ID].forEach((layerId) => {
+  [HIT_LAYER_ID, COORDINATE_STACK_HIT_LAYER_ID, CLUSTER_HIT_LAYER_ID].forEach((layerId) => {
     map.on("mouseenter", layerId, () => {
       map.getCanvas().style.cursor = "pointer";
     });
@@ -3780,57 +3987,25 @@ function ensurePlaceLayers() {
 }
 
 function ensureRouteLayers() {
-  if (!mapLoaded || !map) return;
-
-  if (!map.getSource(ROUTE_LINE_SOURCE_ID)) {
-    map.addSource(ROUTE_LINE_SOURCE_ID, {
-      type: "geojson",
-      data: featureCollection()
-    });
-    map.addLayer({
-      id: "story-route-line",
-      type: "line",
-      source: ROUTE_LINE_SOURCE_ID,
-      layout: {
-        "line-cap": "round",
-        "line-join": "round"
-      },
-      paint: {
-        "line-color": ["get", "color"],
-        "line-width": ["interpolate", ["linear"], ["zoom"], 3, 2.4, 7, 4.8],
-        "line-opacity": 0.78,
-        "line-dasharray": [2.2, 2]
-      }
-    }, SELECTED_LAYER_ID);
-  }
-
-  if (!map.getSource(ROUTE_STOP_SOURCE_ID)) {
-    map.addSource(ROUTE_STOP_SOURCE_ID, {
-      type: "geojson",
-      data: featureCollection()
-    });
-    map.addLayer({
-      id: "story-route-stop-halo",
-      type: "circle",
-      source: ROUTE_STOP_SOURCE_ID,
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 6, 8, 11],
-        "circle-color": ["get", "color"],
-        "circle-opacity": 0.2
-      }
-    }, CIRCLE_LAYER_ID);
-    map.addLayer({
-      id: "story-route-stop-core",
-      type: "circle",
-      source: ROUTE_STOP_SOURCE_ID,
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 3.2, 8, 5],
-        "circle-color": ["get", "color"],
-        "circle-stroke-color": "rgba(255,255,255,0.95)",
-        "circle-stroke-width": 1.8
-      }
-    }, CIRCLE_LAYER_ID);
-  }
+  if (!mapLoaded || !map || map.getSource(ROUTE_STOP_SOURCE_ID)) return;
+  map.addSource(ROUTE_LINE_SOURCE_ID, { type: "geojson", data: featureCollection() });
+  map.addSource(ROUTE_STOP_SOURCE_ID, {
+    type: "geojson", data: featureCollection()
+  });
+  journeyLayers().forEach((layer) => map.addLayer(layer));
+  map.on("click", ROUTE_STOP_HIT_LAYER_ID, (event) => {
+    const feature = nearestMapFeature(event.features, event.point);
+    if (!feature) return;
+    if (feature.properties.groupKind === "nearby") {
+      try { focusOnLocations(JSON.parse(feature.properties.placeIds), true, { minimumZoom: map.getZoom() + 1.25 }); } catch { /* Ignore an invalid feature payload. */ }
+    } else if (feature.properties.count > 1) {
+      openCoordinateStack(feature.properties.key);
+    } else if (feature.properties.id) {
+      selectPlace(feature.properties.id, { revealSheet: true });
+    }
+  });
+  map.on("mouseenter", ROUTE_STOP_HIT_LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
+  map.on("mouseleave", ROUTE_STOP_HIT_LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
 }
 
 function visibleRoutePlaces(route, visiblePlaces) {
@@ -3844,36 +4019,21 @@ function visibleRoutePlaces(route, visiblePlaces) {
 function updateRouteData(visiblePlaces) {
   if (!mapLoaded || !map) return;
   ensureRouteLayers();
+  const data = createJourneyMapData(getActiveRoute(), visiblePlaces, state.selectedId, displayPlaceName);
+  map.getSource(ROUTE_LINE_SOURCE_ID)?.setData(data.line);
+  journeyStopFeatures = data.stops.features;
+  refreshJourneyMarkers(true);
+}
 
-  const lineSource = map.getSource(ROUTE_LINE_SOURCE_ID);
-  const stopSource = map.getSource(ROUTE_STOP_SOURCE_ID);
-  const route = getActiveRoute();
-  if (!lineSource || !stopSource) return;
-
-  if (!route) {
-    lineSource.setData(featureCollection());
-    stopSource.setData(featureCollection());
-    return;
-  }
-
-  const routePlaces = visibleRoutePlaces(route, visiblePlaces);
-  lineSource.setData(featureCollection(routePlaces.length > 1 ? [{
-    type: "Feature",
-    properties: { color: route.color },
-    geometry: {
-      type: "LineString",
-      coordinates: routePlaces.map((place) => [place.lng, place.lat])
-    }
-  }] : []));
-
-  stopSource.setData(featureCollection(routePlaces.map((place) => ({
-    type: "Feature",
-    properties: { color: route.color },
-    geometry: {
-      type: "Point",
-      coordinates: [place.lng, place.lat]
-    }
-  }))));
+function refreshJourneyMarkers(force = false) {
+  if (!mapLoaded || !map || !map.getSource(ROUTE_STOP_SOURCE_ID)) return;
+  const zoom = map.getZoom();
+  if (!force && zoom === journeyMarkerZoom) return;
+  // Keep room for the GeoJSON worker to catch up during a zoom-out animation.
+  const minimumGap = !force && zoom < journeyMarkerZoom ? 32 : 12;
+  journeyMarkerZoom = zoom;
+  const markers = clusterJourneyStops(journeyStopFeatures, (point) => map.project(point), (point) => map.unproject(point), minimumGap);
+  map.getSource(ROUTE_STOP_SOURCE_ID)?.setData(featureCollection(markers));
 }
 
 function renderMap(visiblePlaces) {
@@ -3885,34 +4045,75 @@ function renderMap(visiblePlaces) {
   const source = map.getSource(SOURCE_ID);
   const stackSource = map.getSource(COORDINATE_STACK_SOURCE_ID);
   if (!source || !stackSource) return;
-  const coordinateGroups = groupPlacesByCoordinate(visiblePlaces);
-  source.setData(featureCollection(visiblePlaces.map((place) => featureForPlace(place, coordinateGroups))));
-  stackSource.setData(featureCollection(coordinateStacks(visiblePlaces).map(featureForCoordinateStack)));
+  mapDataRevision += 1;
+  // Reading order must not change how the map groups the same result set.
+  const visibleIds = new Set(visiblePlaces.map((place) => place.id));
+  const atlasPlaces = getActiveRoute() ? [] : allPlaces.filter((place) => visibleIds.has(place.id));
+  const coordinateGroups = groupPlacesByCoordinate(atlasPlaces);
+  source.setData(featureCollection(atlasPlaces.map((place) => featureForPlace(place, coordinateGroups))));
+  stackSource.setData(featureCollection(coordinateStacks(atlasPlaces).map(featureForCoordinateStack)));
+
 }
 
-function setMapFallback(message = "MapLibre or the vector basemap could not load.") {
+function setMapControlsAvailable(available) {
+  [zoomIn, zoomOut, compassReset].forEach((button) => { button.disabled = !available; });
+  zoomHome.disabled = !available || !visiblePlacesCache.length;
+  mapViewSwitcher.disabled = !available;
+}
+
+function retryMap() {
+  if (!allPlaces.length || !maplibregl) {
+    window.location.reload();
+    return;
+  }
+  const focusWasInFallback = mapFallback.contains(document.activeElement);
+  window.clearTimeout(fallbackTimer);
+  mapDataRevision += 1;
+  mapLoaded = false;
+  pendingMapViewSourceId = null;
+  failedMapViewSourceIds.clear();
+  try { map?.remove(); } catch { /* A partially initialized renderer can already be disposed. */ }
+  map = null;
+  mapFallback.classList.remove("is-visible");
+  mapLoadStatus.hidden = false;
+  setMapControlsAvailable(false);
+  urlFramePending = true;
+  if (focusWasInFallback) mapStage.focus({ preventScroll: true });
+  try {
+    initializeMap();
+  } catch {
+    setMapFallback("The browser could not initialize the map renderer.");
+  }
+}
+
+function setMapFallback(message = "MapLibre or the vector basemap could not load.", { stillLoading = false } = {}) {
+  if (!stillLoading) window.clearTimeout(fallbackTimer);
+  mapLoadStatus.hidden = true;
   mapFallback.classList.add("is-visible");
-  miniCard.disabled = true;
-  miniCard.classList.add("is-empty");
-  miniCard.setAttribute("aria-label", "Map layer unavailable");
-  miniCard.innerHTML = `
-    <strong>Map layer unavailable</strong>
-    <span>${escapeHtml(message)} Open the app with network access for the basemap.</span>
+  mapFallback.dataset.reason = message;
+  mapFallback.innerHTML = `
+    <div>
+      <strong>${stillLoading ? "The map is taking longer than expected" : allPlaces.length ? "The map couldn't load" : "The atlas couldn't load"}</strong>
+      <p>${stillLoading
+        ? "Search and place details are available while the map continues loading."
+        : allPlaces.length
+        ? "Check your connection and try again. Search and place details are still available."
+        : "The place data is unavailable. Check your connection and try again."}</p>
+      <div class="fallback-actions">
+        <button class="ghost-button" id="retryMapButton" type="button">Try again</button>
+        ${allPlaces.length ? '<button class="ghost-button" id="fallbackPlacesButton" type="button">Browse places</button>' : ""}
+      </div>
+    </div>
   `;
-  [zoomIn, zoomOut, zoomHome, compassReset].forEach((button) => {
-    button.disabled = true;
-    button.style.opacity = "0.55";
-    button.style.cursor = "not-allowed";
-  });
+  document.getElementById("retryMapButton").addEventListener("click", retryMap);
+  document.getElementById("fallbackPlacesButton")?.addEventListener("click", revealSearchResults);
+  setMapControlsAvailable(false);
 }
 
 function clearMapFallback() {
+  mapLoadStatus.hidden = true;
   mapFallback.classList.remove("is-visible");
-  [zoomIn, zoomOut, zoomHome, compassReset].forEach((button) => {
-    button.disabled = false;
-    button.style.opacity = "";
-    button.style.cursor = "";
-  });
+  setMapControlsAvailable(true);
 }
 
 function collapseCompactMapAttribution() {
@@ -3928,50 +4129,92 @@ function configureMapAccessibility() {
   const canvas = map.getCanvas();
   canvas.setAttribute("aria-hidden", "true");
   canvas.setAttribute("tabindex", "-1");
+  if (!configuredMapCanvases.has(canvas)) {
+    configuredMapCanvases.add(canvas);
+    // Pointer interaction focuses MapLibre's canvas. Keep subsequent keyboard
+    // input on the named map region with its documented, accessible controls.
+    canvas.addEventListener("focus", () => {
+      const overlay = openDrawer ? dismissPanelForKind(openDrawer)
+        : isMobileLayout() && state.placeSheet === "full" ? inspectorPanel : null;
+      const target = overlay?.querySelector("button:not(:disabled), [tabindex='-1']") || mapStage;
+      target.focus({ preventScroll: true });
+    });
+  }
 }
 
 function initializeMap() {
   fallbackTimer = window.setTimeout(() => {
-    if (!mapLoaded) setMapFallback("The MapLibre style did not respond in time.");
-  }, 6000);
+    if (!mapLoaded) setMapFallback("The MapLibre style did not respond in time.", { stillLoading: true });
+  }, 12000);
 
   map = new maplibregl.Map({
     container: "maplibreMap",
-    style: "https://tiles.openfreemap.org/styles/liberty",
+    style: ATLAS_STYLE_URL,
     bounds: datasetBounds(),
-    fitBoundsOptions: { padding: mapViewPadding(), duration: 0 },
+    fitBoundsOptions: { padding: mapViewPadding(), absolutePadding: true, duration: 0 },
     maxBounds: datasetBounds(3),
+    fadeDuration: 0,
     dragRotate: true,
     pitchWithRotate: false,
-    cooperativeGestures: true,
+    keyboard: false,
+    cooperativeGestures: false,
     attributionControl: {
       customAttribution: `${externalLinkMarkup("OpenBible.info Bible Geocoding Data", sourceMeta.sourceUrl, "map-attribution-link")} ${sourceMeta.license}`
     }
   });
+  const mapInstance = map;
   configureMapAccessibility();
   map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: "metric" }), "bottom-left");
-  syncMapGestureMode();
+  map.on("movestart", (event) => {
+    if (map === mapInstance && event.originalEvent) mapFrameIntent = null;
+  });
+  map.on("zoom", () => {
+    if (map === mapInstance && mapLoaded && getActiveRoute()) refreshJourneyMarkers();
+  });
+  map.on("zoomend", () => {
+    if (map === mapInstance && mapLoaded && getActiveRoute()) refreshJourneyMarkers(true);
+  });
+  map.on("moveend", () => {
+    if (map !== mapInstance || !mapLoaded || restoringHistoryView) return;
+    if (!mapFrameIntent) {
+      cameraState = currentMapCamera();
+      cameraUrlActive = true;
+    }
+    if (cameraUrlActive) requestUrlSync("replace");
+  });
+
+  map.on("style.load", () => {
+    if (map !== mapInstance) return;
+    applyAtlasMapTheme(map);
+    localizeBaseMapToEnglish();
+  });
 
   map.on("load", () => {
+    if (map !== mapInstance) return;
     mapLoaded = true;
     window.clearTimeout(fallbackTimer);
     clearMapFallback();
     ensurePlaceLayers();
     ensureRouteLayers();
-    localizeBaseMapToEnglish();
     configureMapAccessibility();
     collapseCompactMapAttribution();
     syncCompass();
-    renderAll();
+    // The field guide may already be in use while tiles are loading. Only
+    // initialize map data here, preserving reading focus and open disclosures.
+    const visiblePlaces = getVisiblePlaces();
+    renderMap(visiblePlaces);
     if (state.mapView !== DEFAULT_MAP_VIEW_ID) beginMapViewLoadAnnouncement();
+    else announceMapView("Atlas view ready.");
     if (urlFramePending) frameCurrentUrlState(false);
   });
 
   map.on("rotate", () => {
+    if (map !== mapInstance) return;
     if (mapLoaded) syncCompass();
   });
 
   map.on("sourcedata", (event) => {
+    if (map !== mapInstance) return;
     if (!pendingMapViewSourceId || event.sourceId !== pendingMapViewSourceId || !event.isSourceLoaded) return;
     failedMapViewSourceIds.delete(event.sourceId);
     pendingMapViewSourceId = null;
@@ -3979,34 +4222,42 @@ function initializeMap() {
   });
 
   map.on("error", (event) => {
+    if (map !== mapInstance) return;
     if (!mapLoaded && event && event.error) {
       setMapFallback("The MapLibre style or vector resources could not load.");
       return;
     }
 
-    const activeOverlay = activeMapViewOverlay();
-    if (mapLoaded && activeOverlay && event?.sourceId === activeOverlay.sourceId) {
-      if (failedMapViewSourceIds.has(activeOverlay.sourceId)) return;
+    const failedOverlay = mapViewOverlays.find((overlay) => overlay.sourceId === event?.sourceId);
+    if (mapLoaded && failedOverlay) {
+      const alreadyFailed = failedMapViewSourceIds.has(failedOverlay.sourceId);
+      failedMapViewSourceIds.add(failedOverlay.sourceId);
+      // A request can finish after the user changes views. Remember its failure
+      // so returning to that source retries instead of reusing an empty cache.
+      if (alreadyFailed || activeMapViewOverlay()?.sourceId !== failedOverlay.sourceId) return;
       const failedView = mapViewById(state.mapView);
-      failedMapViewSourceIds.add(activeOverlay.sourceId);
       pendingMapViewSourceId = null;
       state.mapView = DEFAULT_MAP_VIEW_ID;
       applyMapView();
       requestUrlSync("replace");
-      announceMapView(`${failedView.label} tiles are unavailable. Atlas has been restored; select ${failedView.label} to retry.`, { visible: true });
+      announceMapView(`${failedView.label} tiles are unavailable. Atlas has been restored; select ${failedView.label} to retry.`, {
+        visible: true,
+        compactMessage: `${failedView.label} unavailable. Atlas restored. Select ${failedView.label} to retry.`
+      });
     }
   });
 
 }
 
-function renderAll({ urlMode = "replace" } = {}) {
+function renderAll({ urlMode = "replace", summaryImmediate = true } = {}) {
   const visiblePlaces = getVisiblePlaces();
   normalizeSelection(visiblePlaces);
   const selectedPlace = placeById(state.selectedId);
   renderStaticControls();
   renderActiveFilters(visiblePlaces);
-  renderSummary(visiblePlaces);
-  renderMiniCard(selectedPlace);
+  renderSummary(visiblePlaces, { immediate: summaryImmediate });
+  syncDocumentTitle();
+  renderMobilePlaceSummary(selectedPlace);
   renderPlacesPanel(visiblePlaces);
   renderDetails(selectedPlace, visiblePlaces);
   setPlaceSheetState(state.placeSheet, { updateMapPadding: false, animate: false });
@@ -4015,28 +4266,44 @@ function renderAll({ urlMode = "replace" } = {}) {
   if (urlMode) requestUrlSync(urlMode);
 }
 
-function trapPlaceDetailFocus(event) {
-  if (event.key !== "Tab" || !isMobileLayout() || state.placeSheet !== "full") return false;
-
-  const focusable = [...inspectorPanel.querySelectorAll(
-    "a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])"
-  )].filter((element) => !element.hasAttribute("hidden") && element.getClientRects().length > 0);
+function trapOverlayFocus(event) {
+  if (event.key !== "Tab") return false;
+  const panel = openDrawer && (openDrawer !== "places" || isMobileLayout()) ? dismissPanelForKind(openDrawer)
+    : !routeMenu.hidden && isMobileLayout() ? routeMenu
+    : isMobileLayout() && state.placeSheet === "full" ? inspectorPanel
+    : null;
+  if (!panel) return false;
+  const focusable = [...panel.querySelectorAll(
+    "a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex='-1'])"
+  )].filter((element) => {
+    if (element.tabIndex < 0 || element.closest("[hidden], [inert]") || !element.getClientRects().length) return false;
+    if (getComputedStyle(element).visibility === "hidden") return false;
+    for (let parent = element.parentElement; parent && parent !== panel; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement && !parent.open && !parent.querySelector(":scope > summary")?.contains(element)) return false;
+    }
+    return true;
+  });
   if (!focusable.length) {
     event.preventDefault();
-    mobilePlaceSummary.focus({ preventScroll: true });
+    panel.focus({ preventScroll: true });
     return true;
   }
 
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
+  if (!panel.contains(document.activeElement)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus({ preventScroll: true });
+    return true;
+  }
   if (event.shiftKey && document.activeElement === first) {
     event.preventDefault();
-    last.focus();
+    last.focus({ preventScroll: true });
     return true;
   }
   if (!event.shiftKey && document.activeElement === last) {
     event.preventDefault();
-    first.focus();
+    first.focus({ preventScroll: true });
     return true;
   }
   return false;
@@ -4052,13 +4319,47 @@ function endSearchComposition(event) {
 }
 
 function bindGlobalEvents() {
+  mapViewDismiss.addEventListener("click", () => {
+    announceMapView(`${mapViewById(state.mapView).label} view selected.`);
+    focusMapViewControl();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (mapLegend.open && !mapLegend.contains(event.target)) mapLegend.open = false;
+  }, { capture: true });
+  placesClearFilters.addEventListener("click", () => {
+    resetPlaceFilters({ fitMap: true });
+    requestAnimationFrame(() => {
+      (placeList.querySelector("[data-place], [data-search-suggestion], #emptyListReset") || placesClose).focus({ preventScroll: true });
+    });
+  });
+  placeOrderSelect.addEventListener("change", () => {
+    state.placeOrder = normalizePlaceOrder(placeOrderSelect.value);
+    const visiblePlaces = getVisiblePlaces();
+    renderPlacesPanel(visiblePlaces);
+    renderDetails(placeById(state.selectedId), visiblePlaces);
+    requestUrlSync("replace");
+  });
   syncViewportMetrics();
   syncMobileOverlayPlacement();
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(() => {
+      if (syncPlaceSummaryHeight()) scheduleViewportChange();
+    }).observe(mobilePlaceSummary);
+  }
   window.addEventListener("resize", scheduleViewportChange);
   window.addEventListener("popstate", handleHistoryPopState);
   shareButton.addEventListener("click", copyCurrentViewLink);
+  document.getElementById("resetMapFilters").addEventListener("click", resetCurrentContext);
+  document.getElementById("mapSearchWholeAtlas").addEventListener("click", () => {
+    handleRouteSelection(null);
+    revealSearchResults();
+  });
+  leaveJourney.addEventListener("click", () => {
+    closeDrawers();
+    handleRouteSelection(null);
+    routePickerButton.focus({ preventScroll: true });
+  });
 
-  miniCard.addEventListener("click", revealSelectedDetails);
   mobilePlaceSummary.addEventListener("click", () => {
     if (!isMobileLayout() || mobilePlaceSummary.disabled) return;
     cyclePlaceSheetState();
@@ -4112,8 +4413,24 @@ function bindGlobalEvents() {
     if (event.target instanceof Element && event.target.closest("button, a, input, select, textarea, [role='button']")) return;
     blurActiveMobileControl();
   }, { passive: true });
+  mapStage.addEventListener("keydown", (event) => {
+    if (event.target !== mapStage || !mapLoaded || !map || event.ctrlKey || event.metaKey || event.altKey) return;
+    const step = event.shiftKey ? 200 : 100;
+    const direction = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+    const rotation = { q: -15, e: 15 }[event.key.toLowerCase()];
+    if (direction || rotation || ["+", "=", "-"].includes(event.key)) mapFrameIntent = null;
+    if (direction) map.panBy(direction, { duration: motionDuration(180) });
+    else if (["+", "="].includes(event.key)) map.zoomIn();
+    else if (event.key === "-") map.zoomOut();
+    else if (rotation) map.easeTo({ bearing: map.getBearing() + rotation, duration: motionDuration(180) });
+    else if (event.key === "0") fitCurrentPlaces(true);
+    else if (event.key === "Enter") {
+      revealSearchResults();
+    } else return;
+    event.preventDefault();
+  });
   document.addEventListener("click", (event) => {
-    if (openDrawer !== "places") return;
+    if (openDrawer !== "places" || !isMobileLayout()) return;
     if (event.target instanceof Node && placesPanel.contains(event.target)) return;
     if (event.target instanceof Node && placesToggle.contains(event.target)) return;
     event.preventDefault();
@@ -4122,32 +4439,43 @@ function bindGlobalEvents() {
   }, true);
 
   document.addEventListener("keydown", (event) => {
-    if (trapPlaceDetailFocus(event)) return;
+    if (trapOverlayFocus(event)) return;
     if (event.key !== "Escape") return;
     if (closeTopMobileOverlay()) event.preventDefault();
   });
 
   zoomIn.addEventListener("click", () => {
     if (!mapLoaded || !map) return;
+    mapFrameIntent = null;
     map.zoomIn();
   });
 
   zoomOut.addEventListener("click", () => {
     if (!mapLoaded || !map) return;
+    mapFrameIntent = null;
     map.zoomOut();
   });
 
   compassReset.addEventListener("click", () => {
     if (!mapLoaded || !map) return;
+    mapFrameIntent = null;
     map.easeTo({ bearing: 0, pitch: 0, duration: motionDuration(500) });
   });
 
-  zoomHome.addEventListener("click", () => fitDefaultView(true));
+  zoomHome.addEventListener("click", () => fitCurrentPlaces(true));
 
-  filterDone.addEventListener("click", closeDrawers);
+  filterDone.addEventListener("click", () => {
+    closeDrawers();
+    fitCurrentPlaces(true);
+  });
+  document.getElementById("filterClearSearch").addEventListener("click", () => {
+    updatePlaceSearch("");
+    document.getElementById("globalBookFilter")?.focus({ preventScroll: true });
+  });
 
   clearFilters.addEventListener("click", () => {
-    resetSearchAndFilters({ fitMap: true });
+    resetPlaceFilters({ fitMap: true });
+    filterDone.focus({ preventScroll: true });
   });
 
   activeFilters.addEventListener("click", (event) => {
@@ -4158,9 +4486,12 @@ function bindGlobalEvents() {
   });
 
   searchClear.addEventListener("click", () => {
-    state.search = "";
-    renderAll();
+    updatePlaceSearch("");
+    fitCurrentPlaces(true);
     searchInput.focus();
+  });
+  searchForm.addEventListener("focusout", (event) => {
+    if (!(event.relatedTarget instanceof Node) || !searchForm.contains(event.relatedTarget)) searchForm.classList.remove("is-expanded");
   });
 
   searchForm.addEventListener("submit", (event) => {
@@ -4170,8 +4501,7 @@ function bindGlobalEvents() {
   });
 
   searchInput.addEventListener("input", () => {
-    state.search = searchInput.value;
-    renderAll();
+    updatePlaceSearch(searchInput.value);
   });
 
   searchInput.addEventListener("keydown", (event) => {
@@ -4185,13 +4515,12 @@ function bindGlobalEvents() {
   searchInput.addEventListener("compositionend", endSearchComposition);
 
   searchInput.addEventListener("search", () => {
-    state.search = searchInput.value;
-    renderAll();
+    updatePlaceSearch(searchInput.value);
   });
 
   placesSearchClear.addEventListener("click", () => {
-    state.search = "";
-    renderAll();
+    updatePlaceSearch("");
+    fitCurrentPlaces(true);
     placesSearchInput.focus();
   });
 
@@ -4202,8 +4531,7 @@ function bindGlobalEvents() {
   });
 
   placesSearchInput.addEventListener("input", () => {
-    state.search = placesSearchInput.value;
-    renderAll();
+    updatePlaceSearch(placesSearchInput.value);
   });
 
   placesSearchInput.addEventListener("keydown", (event) => {
@@ -4213,8 +4541,7 @@ function bindGlobalEvents() {
   });
 
   placesSearchInput.addEventListener("search", () => {
-    state.search = placesSearchInput.value;
-    renderAll();
+    updatePlaceSearch(placesSearchInput.value);
   });
   placesSearchInput.addEventListener("compositionstart", beginSearchComposition);
   placesSearchInput.addEventListener("compositionend", endSearchComposition);
@@ -4229,13 +4556,6 @@ function renderLoading() {
     <p class="section-label">Data</p>
     <h2 class="detail-title">Loading places</h2>
     <div class="empty-state">Loading the pinned OpenBible data snapshot.</div>
-  `;
-  miniCard.disabled = true;
-  miniCard.classList.add("is-empty");
-  miniCard.setAttribute("aria-label", "Loading data");
-  miniCard.innerHTML = `
-    <strong>Loading data</strong>
-    <span>The map will render after the OpenBible place data is ready.</span>
   `;
   syncPlaceSheetSummaryState();
   syncPlaceDetailSurface();
@@ -4253,6 +4573,12 @@ async function loadOpenBibleData() {
 }
 
 async function boot() {
+  // Load the renderer alongside the place data, keeping the field guide and
+  // search available without waiting for the large mapping bundle to execute.
+  const renderer = import("./ui/map-renderer.js").then(
+    (module) => ({ library: module }),
+    (error) => ({ error })
+  );
   bindGlobalEvents();
   renderLoading();
 
@@ -4266,24 +4592,46 @@ async function boot() {
     detailCard.innerHTML = `
       <p class="section-label">Data</p>
       <h2 class="detail-title">Data unavailable</h2>
-      <div class="empty-state">${escapeHtml(error.message)}</div>
+      <div class="empty-state">The place data could not load. Check your connection and try again.</div>
     `;
+    [searchInput, searchClear, filterToggle, routePickerButton, placesToggle, aboutToggle].forEach((control) => { control.disabled = true; });
     setMapFallback("The OpenBible data snapshot could not load.");
     syncPlaceSheetSummaryState();
     syncPlaceDetailSurface();
     return;
   }
 
-  if (isOverlayHistoryState()) {
-    try {
-      window.history.replaceState(durableHistoryState(), "", window.location.href);
-    } catch {
-      // The transient overlay marker is harmless if history state is unavailable.
-    }
-  }
   urlStateReady = true;
-  restoreUrlStateFromLocation({ frame: true });
-  initializeMap();
+  restoreHistoryView({ frame: true });
+  try {
+    const result = await renderer;
+    if (result.error) throw result.error;
+    maplibregl = result.library;
+    initializeMap();
+  } catch {
+    window.clearTimeout(fallbackTimer);
+    setMapFallback("The browser could not initialize the map renderer.");
+  }
 }
 
 boot();
+
+if (import.meta.env.DEV && new URLSearchParams(location.search).has("audit")) {
+  Promise.all([import("./ui/accessibility-audit.js"), import("./ui/map-layout-audit.js")]).then(([{ installAccessibilityAudit }, { inspectMapLayout, startJourneyMotionAudit }]) => {
+    installAccessibilityAudit({
+      inspectMap: () => ({
+        ...inspectMapLayout({
+          map, loaded: mapLoaded, frame: mapFrameIntent,
+          expectedPlaces: mapFrameIntent?.kind === "places" ? mapFrameIntent.ids.map(placeById).filter(Boolean) : [],
+          routePlaces: getActiveRoute() ? visibleRoutePlaces(getActiveRoute(), visiblePlacesCache) : [],
+          padding: mapViewPadding()
+        }),
+        scrollEdges: {
+          observed: scrollEdgeObservedElements.size,
+          detached: [...scrollEdgeObservedElements].filter((element) => !element.isConnected).length
+        }
+      }),
+      startMotion: () => startJourneyMotionAudit(map)
+    });
+  });
+}

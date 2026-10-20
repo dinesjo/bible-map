@@ -19,6 +19,7 @@ The default Atlas view uses the public OpenFreeMap service and its Liberty style
 - Map data: OpenStreetMap contributors, https://www.openstreetmap.org/copyright
 - License: Open Database License 1.0, https://opendatacommons.org/licenses/odbl/1-0/
 - Use: the browser requests the style, fonts, and vector tiles from OpenFreeMap at runtime. They are not bundled with or persisted by this application.
+- Style adaptation: the application adjusts Liberty's colors, label contrast, and road prominence for the atlas interface. Modern road shields, transit symbols, and POIs are hidden; journey views also simplify modern settlement labels. Underlying geographic data and source attribution are preserved.
 
 ## Mapterhorn
 
@@ -46,3 +47,11 @@ Map rendering uses MapLibre GL JS under the BSD 3-Clause License.
 
 - Project: https://maplibre.org/maplibre-gl-js/docs/
 - License: https://github.com/maplibre/maplibre-gl-js/blob/main/LICENSE.txt
+
+## Interface fonts
+
+The interface self-hosts Newsreader and Source Sans 3 under the SIL Open Font License 1.1. Their license texts are distributed alongside the font files in `public/fonts/Newsreader-OFL.txt` and `public/fonts/SourceSans3-LICENSE.md`.
+
+## Editorial notes and passage links
+
+The short biblical-context introductions and journey descriptions are editorial guides authored for Bible Map. Their passage links open the English Standard Version on Bible Gateway. No ESV passage text is bundled with the application.
