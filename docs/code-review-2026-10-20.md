@@ -14,5 +14,6 @@ Reviewed the pending atlas redesign against `ed24963`, including map and journey
 - `npm audit --omit=dev --audit-level=high`: no known production dependency vulnerabilities reported.
 - Browser regression: repeated search rerenders leave no detached scroll-observer targets. The preceding [UI audit](./ui-polish-2026-10-20.md) records desktop, phone, keyboard, history, provider-failure, map-layout, and accessibility checks.
 - The post-fix accessibility scan reported 0 violations. Its one automatic review item concerns the hidden journey dialog referenced by `aria-controls`; the target exists and the relationship was checked during the UI audit.
+- The first container CI run passed the build and Nginx configuration test, then exposed a startup race in the readiness probe: Docker accepted a connection before Nginx was listening and reset it. The probe now retries connection resets as well as refused connections, with bounded attempts and request timeouts; failed checks also print the server logs.
 
 The generated OpenBible snapshot is unchanged. No further blocking issue was found in this review. Physical devices, external screen readers, and the deployed URL remain unverified by the local audit; CI verifies the actual production container separately.
