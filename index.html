@@ -3,20 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#17201d">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f8f7f3">
+  <meta name="description" content="Explore the biblical world. Find ancient places, follow journeys through Scripture, and discover the Bible passages that mention each place.">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Bible Map">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/site.webmanifest">
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 64x64">
   <link rel="icon" href="/favicon.png" type="image/png">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/favicon.png">
   <link rel="preload" href="/fonts/Newsreader-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/fonts/SourceSans3-Variable.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/src/styles.css">
-  <title>Bible Map | OpenBible biblical geography</title>
+  <title>Bible Map | Atlas of the biblical world</title>
 </head>
 <body>
   <svg class="ui-icon-sprite" aria-hidden="true" focusable="false">
@@ -60,6 +62,12 @@
       <circle cx="12" cy="12" r="8.5"></circle>
       <path d="M12 10.5v5M12 7.5h.01"></path>
     </symbol>
+    <symbol id="icon-help" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 4.2 1.8c-1 .8-1.7 1.2-1.7 2.7"/><circle cx="12" cy="17" r=".6"/>
+    </symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24">
+      <path d="m5 12 4 4L19 6"></path>
+    </symbol>
     <symbol id="icon-link" viewBox="0 0 24 24">
       <path d="M9.5 14.5l5-5"></path>
       <path d="M7.25 16.75l-1 1a3 3 0 0 1-4.25-4.25l3.25-3.25a3 3 0 0 1 4.25 0"></path>
@@ -70,7 +78,7 @@
   <main class="page">
     <header class="atlas-bar glass">
       <a class="skip-link" href="#mapStage">Skip to map</a>
-      <div class="brand-block">
+      <a class="brand-block" href="/">
         <svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
           <rect class="brand-mark-frame" x="1" y="1" width="46" height="46" rx="1.5"></rect>
           <path class="brand-mark-map" d="M8.5 11.5 19 8l10 3.5L39.5 8v28.5L29 40l-10-3.5L8.5 40Z"></path>
@@ -81,31 +89,31 @@
           <h1 class="brand-name"><span>Bible</span> <span>Map</span></h1>
           <p class="brand-tagline">Atlas of the biblical world</p>
         </div>
-      </div>
+      </a>
 
       <div class="route-picker" id="routePicker">
         <button
           class="route-picker-button"
           id="routePickerButton"
           type="button"
-          aria-haspopup="listbox"
+          aria-haspopup="dialog"
           aria-expanded="false"
           aria-controls="routeMenu"
         >
-          <span class="control-kicker" aria-hidden="true">Journey guide</span>
-          <span id="routePickerText">All places</span>
+          <span class="control-kicker" aria-hidden="true">Explore a journey</span>
+          <span id="routePickerText">Journeys</span>
           <svg class="ui-icon route-picker-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"></use></svg>
         </button>
-        <div class="route-menu" id="routeMenu" role="listbox" aria-label="Choose route guide" hidden></div>
+        <div class="route-menu" id="routeMenu" role="dialog" aria-modal="false" aria-labelledby="routeMenuTitle" hidden></div>
       </div>
 
       <form class="search-shell" id="searchForm" role="search" aria-label="Atlas search">
         <svg class="ui-icon search-icon" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
-        <label class="sr-only" for="searchInput">Search place names, modern locations, aliases, Bible books and references, place types, or journeys</label>
+        <label class="sr-only" for="searchInput">Search places or Bible references</label>
         <input
           id="searchInput"
           type="search"
-          placeholder="Search"
+          placeholder="Place or Bible reference"
           enterkeyhint="search"
           maxlength="160"
           autocomplete="off"
@@ -120,13 +128,13 @@
       <nav class="atlas-actions" aria-label="Map tools">
         <button class="tool-button" id="filterToggle" type="button" aria-expanded="false" aria-controls="filterPanel">
           <span>Filters</span>
-          <strong id="activeFilterCount">0</strong>
+          <strong id="activeFilterCount" hidden>0</strong>
         </button>
-        <button class="tool-button source-button share-button" id="shareButton" type="button" aria-label="Copy link to current map view">
+        <button class="tool-button source-button share-button" id="shareButton" type="button" aria-label="Share this map: copy link" title="Copy link to this map">
           <svg class="ui-icon source-button-icon" aria-hidden="true" focusable="false"><use href="#icon-link"></use></svg>
           <span id="shareButtonText">Share</span>
         </button>
-        <button class="tool-button source-button" id="aboutToggle" type="button" aria-label="About the data" aria-expanded="false" aria-controls="aboutPanel">
+        <button class="tool-button source-button" id="aboutToggle" type="button" aria-label="About this atlas" title="About this atlas" aria-expanded="false" aria-controls="aboutPanel">
           <svg class="ui-icon source-button-icon" aria-hidden="true" focusable="false"><use href="#icon-info"></use></svg>
           <span>About</span>
         </button>
@@ -137,25 +145,28 @@
     <section class="atlas-workspace">
       <section class="map-panel glass" aria-labelledby="mapTitle">
         <div class="map-strip">
-          <div>
+          <button class="journey-back-button" id="leaveJourney" type="button" aria-label="Back to atlas: leave this journey" hidden><svg class="ui-icon" aria-hidden="true"><use href="#icon-arrow-left"></use></svg><span>Atlas</span></button>
+          <div class="map-strip-title">
             <p class="section-label">Atlas view</p>
-            <h2 id="mapTitle">Known biblical places</h2>
+            <h2 id="mapTitle">Explore the biblical world</h2>
           </div>
           <div class="active-row" id="activeFilters"></div>
         </div>
 
-        <div class="map-stage" id="mapStage" tabindex="0" aria-label="Interactive map of biblical places">
+        <div class="map-stage" id="mapStage" role="region" tabindex="0" aria-label="Interactive map of biblical places" aria-describedby="mapKeyboardHelp">
+          <p class="sr-only" id="mapKeyboardHelp">Use arrow keys to pan, plus and minus to zoom, Q and E to rotate, 0 to fit the current places, or Enter to open the place list.</p>
           <div id="maplibreMap"></div>
-          <div class="map-fallback" id="mapFallback">
+          <div class="map-load-status" id="mapLoadStatus" role="status"><span>Opening the atlas…</span></div>
+          <div class="map-fallback" id="mapFallback" role="status">
             <div>
-              <strong>The basemap could not load</strong>
-              <span>The MapLibre basemap requires network access to the public tile layer.</span>
+              <strong>The map couldn't load</strong>
+              <p>Check your connection and try again.</p>
             </div>
           </div>
 
           <button class="map-places-backdrop" id="placesBackdrop" type="button" aria-label="Close current place list" hidden></button>
 
-          <button class="overlay compass" id="compassReset" type="button" aria-label="Face north">
+          <button class="overlay compass" id="compassReset" type="button" aria-label="Face north" title="Face north" disabled>
             <svg viewBox="0 0 40 40" aria-hidden="true">
               <circle cx="20" cy="20" r="18" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
               <path d="M20 3l4 12l-4 4l-4-4Z" fill="#f0d39a"/>
@@ -166,72 +177,96 @@
             <small>North</small>
           </button>
 
-          <button class="overlay mini-card" id="miniCard" type="button" aria-controls="inspectorPanel" aria-label="Selected place details" disabled>
-            <strong>Selected place</strong>
-            <span>Select a place on the map.</span>
-          </button>
+          <div class="map-primary-controls">
+            <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Open current place list" aria-expanded="false" aria-controls="placesPanel">
+              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-list"></use></svg>
+              <span class="map-places-label" id="placesToggleLabel" aria-hidden="true">Places</span>
+              <span class="sr-only">Place list</span>
+              <strong id="visibleCount">0</strong>
+            </button>
 
-          <button class="overlay map-places-toggle" id="placesToggle" type="button" aria-label="Open current place list" aria-expanded="false" aria-controls="placesPanel">
-            <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-list"></use></svg>
-            <span class="map-places-label" aria-hidden="true">Places</span>
-            <span class="sr-only">Place list</span>
-            <strong id="visibleCount">0</strong>
-          </button>
-
-          <fieldset class="overlay map-view-switcher" id="mapViewSwitcher" aria-describedby="mapViewStatus" disabled>
-            <legend class="sr-only">Map view</legend>
-            <label class="map-view-option">
-              <input type="radio" name="mapView" value="atlas" aria-label="Atlas, clear reference map" checked>
-              <span class="map-view-option-surface">
-                <i class="map-view-swatch is-atlas" aria-hidden="true"></i>
-                <span>Atlas</span>
-              </span>
-            </label>
-            <label class="map-view-option">
-              <input type="radio" name="mapView" value="relief" aria-label="Relief, terrain and landform">
-              <span class="map-view-option-surface">
-                <i class="map-view-swatch is-relief" aria-hidden="true"></i>
-                <span>Relief</span>
-              </span>
-            </label>
-            <label class="map-view-option">
-              <input type="radio" name="mapView" value="satellite" aria-label="Satellite, modern earth imagery">
-              <span class="map-view-option-surface">
-                <i class="map-view-swatch is-satellite" aria-hidden="true"></i>
-                <span>Satellite</span>
-              </span>
-            </label>
-          </fieldset>
-          <span class="map-view-status sr-only" id="mapViewStatus" role="status" aria-live="polite" aria-atomic="true"></span>
+            <fieldset class="overlay map-view-switcher" id="mapViewSwitcher" aria-describedby="mapViewMessage" disabled>
+              <legend class="sr-only">Map view</legend>
+              <label class="map-view-option">
+                <input type="radio" name="mapView" value="atlas" aria-label="Atlas, clear reference map" checked>
+                <span class="map-view-option-surface">
+                  <i class="map-view-swatch is-atlas" aria-hidden="true"></i>
+                  <span>Atlas</span>
+                </span>
+              </label>
+              <label class="map-view-option">
+                <input type="radio" name="mapView" value="relief" aria-label="Relief, terrain and landform">
+                <span class="map-view-option-surface">
+                  <i class="map-view-swatch is-relief" aria-hidden="true"></i>
+                  <span>Relief</span>
+                </span>
+              </label>
+              <label class="map-view-option">
+                <input type="radio" name="mapView" value="satellite" aria-label="Satellite, modern earth imagery">
+                <span class="map-view-option-surface">
+                  <i class="map-view-swatch is-satellite" aria-hidden="true"></i>
+                  <span>Satellite</span>
+                </span>
+              </label>
+            </fieldset>
+            <div class="overlay zoom-controls">
+              <button class="zoom-button" id="zoomIn" type="button" aria-label="Zoom in" title="Zoom in" disabled>
+                <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-plus"></use></svg>
+              </button>
+              <button class="zoom-button" id="zoomOut" type="button" aria-label="Zoom out" title="Zoom out" disabled>
+                <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-minus"></use></svg>
+              </button>
+              <button class="zoom-button" id="zoomHome" type="button" aria-label="Fit all places" title="Fit all places">
+                <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-fit"></use></svg>
+              </button>
+            </div>
+          </div>
+          <div class="map-view-status sr-only" id="mapViewStatus">
+            <span id="mapViewMessage" role="status" aria-live="polite" aria-atomic="true">
+              <span id="mapViewFullMessage"></span>
+              <span id="mapViewCompactMessage"></span>
+            </span>
+            <button id="mapViewDismiss" type="button" aria-label="Dismiss map view message" title="Dismiss map view message" hidden>
+              <svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg>
+            </button>
+          </div>
+          <div class="overlay map-context-note" id="mapContextNote" hidden>
+            <p id="mapContextText" role="status"></p>
+            <button class="text-action" id="resetMapFilters" type="button">Reset search & filters <svg class="ui-icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg></button>
+            <button class="text-action" id="mapSearchWholeAtlas" type="button" hidden>Search the whole atlas <svg class="ui-icon" aria-hidden="true"><use href="#icon-arrow-right"></use></svg></button>
+          </div>
 
           <details class="overlay map-legend" aria-label="Map key">
-            <summary aria-label="Map key">
+            <summary aria-label="Map key" title="Map key">
               <span class="legend-summary-dots" aria-hidden="true">
                 <i class="legend-dot is-high"></i>
                 <i class="legend-dot is-medium"></i>
                 <i class="legend-dot is-low"></i>
                 <i class="legend-dot is-unknown"></i>
               </span>
-              <span>Map key</span>
+              <svg class="ui-icon legend-help-icon" aria-hidden="true"><use href="#icon-help"></use></svg>
+              <span class="legend-summary-label">Map key</span>
               <svg class="ui-icon disclosure-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"></use></svg>
             </summary>
-            <div class="map-legend-body">
-              <p>Marker color shows mapped-location confidence.</p>
+            <div class="map-legend-body" id="mapLegendBody" role="region" tabindex="0" aria-label="Map key explanation">
+              <p>Colors on individual points show location confidence. Numbered groups can contain several confidence levels.</p>
               <ul>
-                <li><i class="legend-dot is-high"></i><span>High <small>500+</small></span></li>
-                <li><i class="legend-dot is-medium"></i><span>Medium <small>200–499</small></span></li>
-                <li><i class="legend-dot is-low"></i><span>Low <small>1–199</small></span></li>
-                <li><i class="legend-dot is-unknown"></i><span>Unknown <small>0 or below</small></span></li>
+                <li><i class="legend-dot is-high" aria-hidden="true"></i><span>High <small>Stronger support</small></span></li>
+                <li><i class="legend-dot is-medium" aria-hidden="true"></i><span>Medium <small>Some support</small></span></li>
+                <li><i class="legend-dot is-low" aria-hidden="true"></i><span>Low <small>Limited support</small></span></li>
+                <li><i class="legend-dot is-unknown" aria-hidden="true"></i><span>Unknown <small>Not established</small></span></li>
               </ul>
               <div class="legend-stack-row">
                 <i class="legend-stack-marker" aria-hidden="true">12</i>
-                <span>A number means several visible records share that exact point. Select it to choose a place.</span>
+                <span>Numbers group nearby places. Select a group to zoom in; a group at one exact point opens a place list.</span>
               </div>
-              <p class="legend-caveat">Some points represent a settlement, area, region, or path. See Evidence for the marker's role.</p>
+              <p>Clay highlights your selected place, or the group containing it. Zoom in to reveal the individual point.</p>
+              <p class="legend-caveat">Some points represent a settlement, area, region, or path. See Location for the marker's role.</p>
+              <p class="map-keyboard-hint"><strong>With the map focused:</strong> arrow keys pan; + and − zoom; Q and E rotate; 0 fits the current places; Enter opens the place list.</p>
             </div>
           </details>
 
-          <aside class="overlay map-places-panel glass" id="placesPanel" role="dialog" aria-modal="false" aria-labelledby="placesTitle" aria-hidden="true">
+          <section class="overlay map-places-panel glass" id="placesPanel" role="dialog" aria-modal="false" aria-labelledby="placesTitle" aria-hidden="true">
             <div class="drawer-head">
               <div>
                 <p class="section-label" id="placesKicker">Current places</p>
@@ -244,14 +279,17 @@
                 </button>
               </div>
             </div>
-            <p class="places-context-note" id="placesContextNote" hidden></p>
+            <div class="places-context-row" id="placesContextRow" hidden>
+              <p class="places-context-note" id="placesContextNote"></p>
+              <button class="text-action" id="placesClearFilters" type="button" hidden>Clear filters</button>
+            </div>
             <form class="search-shell places-search-shell" id="placesSearchForm" role="search" aria-label="Search current results">
               <svg class="ui-icon search-icon" aria-hidden="true" focusable="false"><use href="#icon-search"></use></svg>
               <label class="sr-only" for="placesSearchInput">Search names, modern locations, aliases, Bible books and references, place types, or journeys</label>
               <input
                 id="placesSearchInput"
                 type="search"
-                placeholder="Search"
+                placeholder="Try Jerusalem or John 1:28"
                 enterkeyhint="search"
                 maxlength="160"
                 autocomplete="off"
@@ -262,31 +300,26 @@
                 <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg>
               </button>
             </form>
+            <div class="places-list-tools" id="placesListTools" hidden>
+              <label for="placeOrderSelect">Sort by</label>
+              <select id="placeOrderSelect">
+                <option value="references">Most references</option>
+                <option value="name">Name, A–Z</option>
+              </select>
+            </div>
             <div class="place-list" id="placeList"></div>
-          </aside>
+          </section>
 
-          <div class="overlay zoom-controls">
-            <button class="zoom-button" id="zoomIn" type="button" aria-label="Zoom in">
-              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-plus"></use></svg>
-            </button>
-            <button class="zoom-button" id="zoomOut" type="button" aria-label="Zoom out">
-              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-minus"></use></svg>
-            </button>
-            <button class="zoom-button" id="zoomHome" type="button" aria-label="Fit all places">
-              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-fit"></use></svg>
-            </button>
-          </div>
         </div>
       </section>
 
-      <aside class="inspector-panel glass" id="inspectorPanel" tabindex="-1" data-sheet-state="peek">
+      <section class="inspector-panel glass" id="inspectorPanel" aria-label="Place information" tabindex="-1" data-sheet-state="peek">
         <button
           class="mobile-place-summary"
           id="mobilePlaceSummary"
           type="button"
           aria-controls="detailCard"
           aria-expanded="false"
-          aria-label="Expand selected place details"
         >
           <span class="selected-place-copy">
             <strong id="mobilePlaceSummaryTitle">Selected place</strong>
@@ -298,17 +331,19 @@
           </span>
         </button>
         <section class="detail-card" id="detailCard"></section>
-      </aside>
+      </section>
 
       <button
         class="place-detail-scrim"
         id="placeDetailScrim"
         type="button"
         aria-label="Back to map"
+        aria-hidden="true"
+        tabindex="-1"
         hidden
       ></button>
 
-      <aside class="drawer-panel filter-panel glass" id="filterPanel" role="dialog" aria-modal="false" aria-labelledby="filterTitle" aria-hidden="true">
+      <section class="drawer-panel filter-panel glass" id="filterPanel" role="dialog" aria-modal="false" aria-labelledby="filterTitle" aria-hidden="true">
         <div class="drawer-head">
           <div>
             <p class="section-label">Filter places</p>
@@ -319,6 +354,10 @@
           </button>
         </div>
 
+        <div class="filter-context" id="filterContext" hidden>
+          <p id="filterContextText"></p>
+          <button class="text-action" id="filterClearSearch" type="button" hidden>Clear search</button>
+        </div>
         <div class="filter-stack">
           <div class="group-block">
             <h3>Testament</h3>
@@ -327,10 +366,12 @@
           <section class="group-block book-filter-block" aria-labelledby="bookFilterTitle">
             <h3 id="bookFilterTitle">Book</h3>
             <div class="book-row" id="bookFilters"></div>
+            <p class="filter-hint">Counts include the current view, search, and other filters.</p>
           </section>
           <div class="group-block">
             <h3>Confidence</h3>
             <div class="filter-row" id="confidenceFilters"></div>
+            <p class="filter-hint">Confidence describes the identification, not the marker's exactness.</p>
           </div>
           <details class="filter-more">
             <summary>
@@ -345,23 +386,23 @@
           <button class="ghost-button" id="clearFilters" type="button">Reset filters</button>
           <button class="ghost-button" id="filterDone" type="button">Close filters</button>
         </div>
-      </aside>
+      </section>
 
-      <aside class="drawer-panel about-panel glass" id="aboutPanel" role="dialog" aria-modal="false" aria-labelledby="aboutTitle" aria-hidden="true">
+      <section class="drawer-panel about-panel glass" id="aboutPanel" role="dialog" aria-modal="false" aria-labelledby="aboutTitle" aria-hidden="true">
         <div class="drawer-head">
           <div>
-            <p class="section-label">Data and license</p>
-            <h2 class="drawer-title" id="aboutTitle">About the data</h2>
+            <p class="section-label">A field atlas</p>
+            <h2 class="drawer-title" id="aboutTitle">About Bible Map</h2>
           </div>
-          <button class="icon-button" id="aboutClose" type="button" aria-label="Close data source information">
+          <button class="icon-button" id="aboutClose" type="button" aria-label="Close atlas information">
             <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-close"></use></svg>
           </button>
         </div>
         <div class="about-content" id="aboutContent"></div>
-      </aside>
+      </section>
 
       <div class="drawer-scrim" id="drawerScrim" hidden></div>
-      <button class="route-menu-scrim" id="routeMenuScrim" type="button" aria-label="Close route guide chooser" hidden></button>
+      <button class="route-menu-scrim" id="routeMenuScrim" type="button" aria-label="Close route guide chooser" aria-hidden="true" tabindex="-1" hidden></button>
     </section>
 
     <p class="sr-only" id="summaryText" role="status" aria-live="polite" aria-atomic="true">Choose a route guide to highlight a path on the map.</p>

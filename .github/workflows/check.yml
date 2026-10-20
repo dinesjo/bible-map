@@ -1,0 +1,45 @@
+name: Check app
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check app
+        run: npm run check
+
+      - name: Build production image
+        run: docker build --pull --tag bible-map:check .
+
+      - name: Check production server
+        run: |
+          docker run --rm --entrypoint nginx bible-map:check -t
+          docker run --detach --name bible-map-check --publish 127.0.0.1:8080:80 bible-map:check
+          curl --fail --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:8080/ --output /dev/null
+          npm run check:server
+
+      - name: Stop production server
+        if: always()
+        run: docker rm --force bible-map-check || true
